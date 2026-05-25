@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Check-in Automático - Treinamento Flamboyant</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --success: #10b981;
+            --danger: #ef4444;
+            --background: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --glow: rgba(37, 99, 235, 0.4);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--background);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(37, 99, 235, 0.15) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(16, 185, 129, 0.1) 0%, transparent 40%);
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            padding: 40px 30px;
+            width: 100%;
+            max-width: 420px;
+            box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            animation: fadeInUp 0.8s ease-out;
+            position: relative;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            color: var(--text-muted);
+            font-size: 15px;
+            line-height: 1.5;
+            margin-bottom: 30px;
+        }
+
+        /* Status de Geolocalização */
+        .gps-status {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: all 0.3s ease;
+        }
+
+        .gps-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: var(--text-muted);
+            position: relative;
+        }
+
+        .gps-indicator.searching {
+            background-color: #fbbf24;
+            animation: pulse 1.5s infinite;
+        }
+
+        .gps-indicator.success {
+            background-color: var(--success);
+            box-shadow: 0 0 12px var(--success);
+        }
+
+        .gps-indicator.error {
+            background-color: var(--danger);
+            box-shadow: 0 0 12px var(--danger);
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.9); opacity: 0.6; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(0.9); opacity: 0.6; }
+        }
+
+        .gps-text {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        /* Campos do Formulário */
+        .form-group {
+            margin-bottom: 24px;
+            text-align: left;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .input-control {
+            width: 100%;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 14px 16px;
+            color: var(--text-main);
+            font-family: inherit;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            outline: none;
+        }
+
+        .input-control:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--glow);
+        }
+
+        /* Botão de Check-in */
+        .btn-checkin {
+            width: 100%;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: #ffffff;
+            border: none;
+            border-radius: 12px;
+            padding: 16px;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+        }
+
+        .btn-checkin:disabled {
+            background: #334155;
+            color: #64748b;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        .btn-checkin:not(:disabled):hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px var(--glow);
+        }
+
+        .btn-checkin:not(:disabled):active {
+            transform: translateY(0);
+        }
+
+        /* Resultado / Feedback */
+        .feedback {
+            margin-top: 24px;
+            padding: 16px;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 500;
+            display: none;
+            animation: fadeIn 0.4s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .feedback.success {
+            background-color: rgba(16, 185, 129, 0.15);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: #34d399;
+            display: block;
+        }
+
+        .feedback.error {
+            background-color: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #f87171;
+            display: block;
+        }
+
+        .loader {
+            border: 2px solid rgba(255,255,255,0.2);
+            border-top: 2px solid #ffffff;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            animation: spin 0.8s linear infinite;
+            display: inline-block;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">
+            <h1>Auto Check-in</h1>
+            <p>Confirme sua presença no Treinamento Flamboyant validando sua localização atual.</p>
+        </div>
+
+        <!-- Status do GPS -->
+        <div class="gps-status" id="gps-status-box">
+            <span class="gps-indicator searching" id="gps-indicator"></span>
+            <span class="gps-text" id="gps-text">Obtendo localização GPS...</span>
+        </div>
+
+        <form id="checkin-form" onsubmit="realizarCheckin(event)">
+            <div class="form-group">
+                <label for="email">E-mail de Inscrição</label>
+                <input type="email" id="email" class="input-control" placeholder="seuemail@exemplo.com" required>
+            </div>
+
+            <button type="submit" id="btn-submit" class="btn-checkin" disabled>
+                <span>Confirmar Presença</span>
+            </button>
+        </form>
+
+        <div class="feedback" id="feedback-message"></div>
+    </div>
+
+    <script>
+        // Coordenadas do Shopping Flamboyant
+        const FLAMBOYANT_LAT = -16.7093;
+        const FLAMBOYANT_LON = -49.2344;
+        const RAIO_PERMITIDO_METROS = 50;
+
+        let localizacaoValida = false;
+        let treinamentoId = "";
+
+        // Extrai treinamento_id da URL
+        function obterParametroUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            treinamentoId = urlParams.get('treinamento_id') || "";
+            if (!treinamentoId) {
+                mostrarErro("ID do Treinamento ausente no QR Code. Por favor, solicite ajuda ao organizador.");
+                setGpsStatus('error', 'Código do Evento Inválido');
+            }
+        }
+
+        // Fórmula de Haversine para distância entre coordenadas em metros
+        function calcularDistancia(lat1, lon1, lat2, lon2) {
+            const R = 6371000; // Raio da Terra em metros
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = 
+                Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-c || a === 1 ? 0 : 1 - a)); 
+            // Uma aproximação simplificada segura de Haversine:
+            const c_safe = 2 * Math.asin(Math.sqrt(a));
+            return R * c_safe;
+        }
+
+        function setGpsStatus(state, text) {
+            const indicator = document.getElementById('gps-indicator');
+            const textBox = document.getElementById('gps-text');
+            
+            indicator.className = 'gps-indicator ' + state;
+            textBox.innerText = text;
+        }
+
+        // Valida geolocalização do usuário
+        function obterLocalizacao() {
+            if (!navigator.geolocation) {
+                setGpsStatus('error', 'Geolocalização não suportada');
+                mostrarErro("Seu navegador não oferece suporte à geolocalização. Use outro navegador.");
+                return;
+            }
+
+            setGpsStatus('searching', 'Localizando via GPS...');
+            
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const userLat = position.coords.latitude;
+                    const userLon = position.coords.longitude;
+                    
+                    const distancia = calcularDistancia(userLat, userLon, FLAMBOYANT_LAT, FLAMBOYANT_LON);
+                    
+                    console.log(`User Lat: ${userLat}, Lon: ${userLon}`);
+                    console.log(`Distância calculada: ${distancia.toFixed(2)}m`);
+
+                    if (distancia <= RAIO_PERMITIDO_METROS) {
+                        localizacaoValida = true;
+                        setGpsStatus('success', 'Localização Validada (Shopping Flamboyant)');
+                        if (treinamentoId) {
+                            document.getElementById('btn-submit').disabled = false;
+                        }
+                    } else {
+                        localizacaoValida = false;
+                        setGpsStatus('error', `Fora do Shopping (${distancia.toFixed(0)}m de distância)`);
+                        mostrarErro(`Você está fora do perímetro permitido (${distancia.toFixed(0)}m do auditório). A presença só pode ser confirmada no local.`);
+                        document.getElementById('btn-submit').disabled = true;
+                    }
+                },
+                (error) => {
+                    let mensagemErro = "Erro ao acessar o GPS.";
+                    switch (error.code) {
+                        case error.PERMISSION_DENIED:
+                            mensagemErro = "Permissão de localização negada pelo usuário.";
+                            break;
+                        case error.POSITION_UNAVAILABLE:
+                            mensagemErro = "Sinal de GPS indisponível.";
+                            break;
+                        case error.TIMEOUT:
+                            mensagemErro = "Tempo esgotado para obter localização.";
+                            break;
+                    }
+                    setGpsStatus('error', 'Acesso ao GPS Negado');
+                    mostrarErro(`${mensagemErro} Por favor, ative a localização no seu aparelho e recarregue a página.`);
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 0
+                }
+            );
+        }
+
+        function mostrarErro(mensagem) {
+            const feedback = document.getElementById('feedback-message');
+            feedback.className = "feedback error";
+            feedback.innerHTML = mensagem;
+        }
+
+        function mostrarSucesso(mensagem) {
+            const feedback = document.getElementById('feedback-message');
+            feedback.className = "feedback success";
+            feedback.innerHTML = mensagem;
+        }
+
+        // Executa o PATCH na API Go
+        async function realizarCheckin(event) {
+            event.preventDefault();
+            
+            if (!localizacaoValida) {
+                mostrarErro("Localização GPS inválida. Você precisa estar dentro do Shopping Flamboyant.");
+                return;
+            }
+
+            if (!treinamentoId) {
+                mostrarErro("Código do treinamento inválido.");
+                return;
+            }
+
+            const email = document.getElementById('email').value.trim();
+            const btn = document.getElementById('btn-submit');
+            
+            // Ativa loading no botão
+            btn.disabled = true;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<span class="loader"></span> <span>Processando...</span>';
+
+            // O backend Go roda localmente por padrão na porta 8080 (ou conforme configurado)
+            // Usamos a URL relativa se a página fosse hospedada no mesmo servidor, ou absoluta
+            // Vamos usar a URL absoluta padrão http://localhost:8080/api/presencas/confirmar.
+            // Para maior robustez em rede local, pode-se usar o IP da máquina. Em produção, seria o domínio do Go.
+            const urlGo = "http://localhost:8080/api/presencas/confirmar";
+
+            try {
+                const response = await fetch(urlGo, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        treinamento_id: treinamentoId,
+                        email: email
+                    })
+                });
+
+                if (response.ok) {
+                    mostrarSucesso("✔️ Presença Confirmada! Seu status foi alterado para <strong>PRESENTE</strong>. Bom treinamento!");
+                    btn.style.display = "none";
+                    document.getElementById('email').disabled = true;
+                } else {
+                    const errText = await response.text();
+                    mostrarErro(`❌ Falha no Check-in: ${errText || "Inscrição pendente não encontrada para este e-mail."}`);
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                }
+            } catch (error) {
+                console.error("Erro na requisição:", error);
+                mostrarErro("❌ Erro de conexão. Não foi possível conectar ao servidor da presença.");
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+        }
+
+        // Inicialização ao carregar a página
+        window.onload = () => {
+            obterParametroUrl();
+            obterLocalizacao();
+        };
+    </script>
+</body>
+</html>
