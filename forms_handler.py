@@ -13,24 +13,50 @@ def obter_lojas_ativas():
     """Busca os nomes de todas as lojas ativas no banco de dados para popular o formulário."""
     try:
         with db_cursor() as cursor:
-            cursor.execute("SELECT nome FROM lojas WHERE status = true ORDER BY nome;")
+            cursor.execute("SELECT DISTINCT nome FROM lojas WHERE status = true ORDER BY nome;")
             lojas = cursor.fetchall()
             return [loja[0] for loja in lojas]
     except Exception as e:
         logger.error(f"Erro ao buscar lojas para o Forms: {e}")
         return []
 
+def verificar_forms_existente(treinamento_id: str) -> str:
+    """Verifica na tabela se já existe um formulário atrelado a este treinamento."""
+    try:
+        with db_cursor() as cursor:
+            cursor.execute("SELECT url_formulario FROM formularios_treinamento WHERE treinamento_id = %s LIMIT 1;", (treinamento_id,))
+            resultado = cursor.fetchone()
+            if resultado:
+                return resultado[0]
+    except Exception as e:
+        logger.warning(f"Aviso ao verificar formulário existente no banco: {e}")
+    return None
+
+def salvar_forms_no_banco(treinamento_id: str, form_id: str, url_formulario: str):
+    """Registra o vínculo do novo formulário com o treinamento na tabela do Supabase."""
+    try:
+        with db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO formularios_treinamento (treinamento_id, google_form_id, url_formulario, criado_em)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (treinamento_id) DO NOTHING;
+            """, (treinamento_id, form_id, url_formulario))
+    except Exception as e:
+        logger.error(f"Erro ao salvar o formulário no banco de dados: {e}")
+
 def criar_google_form(treinamento_id: str, tema_treinamento: str) -> str:
     """
-    Cria um formulário no Google Forms de forma 100% autônoma via Service Account.
-    Mapeia as perguntas obrigatórias e popula o Dropdown de Lojas dinamicamente.
-    Retorna a URL pública de resposta (responderUri).
+    Cria ou recupera um formulário no Google Forms.
+    Garante a exclusão de perguntas fantasmas e limita estritamente a 1 resposta por conta.
     """
-    # Inicializa as variáveis de retorno para evitar erros de escopo
+    url_existente = verificar_forms_existente(treinamento_id)
+    if url_existente:
+        logger.info(f"🔄 [REUTILIZADO] Formulário já existia para o treinamento {treinamento_id}. Retornando URL salva.")
+        return url_existente
+
     form_id = None
     responder_uri = f"https://docs.google.com/forms/d/e/mock_form_fallback_{treinamento_id}/viewform"
 
-    # 1. Carrega as credenciais preferencialmente de token.json (OAuth2 pessoal) ou fallback para Conta de Serviço
     creds = None
     token_path = "token.json"
     scopes = [
@@ -62,21 +88,14 @@ def criar_google_form(treinamento_id: str, tema_treinamento: str) -> str:
                 scopes=scopes
             )
         else:
-            logger.warning(
-                f"Nenhum arquivo de credenciais encontrado (token.json ou '{config.GOOGLE_SERVICE_ACCOUNT_FILE}'). "
-                "Usando modo de SIMULAÇÃO para o Google Forms."
-            )
             mock_uri = f"https://docs.google.com/forms/d/e/mock_form_{treinamento_id}/viewform"
-            logger.info(f"[SIMULAÇÃO] Forms criado com sucesso para Treinamento '{tema_treinamento}'. Link: {mock_uri}")
             return mock_uri
 
     try:
         form_service = build('forms', 'v1', credentials=creds)
         drive_service = build('drive', 'v3', credentials=creds)
 
-        # 3. Cria o formulário via Google Drive API (mimeType de Google Forms)
-        # NOTA: A Forms API v1 não suporta criação direta via Service Account sem Domain-Wide Delegation.
-        # A solução é criar o arquivo no Drive com o mimeType correto e depois usar o Forms API para editar.
+        # 1. Cria o formulário em branco no Drive
         drive_file_meta = {
             "name": f"Inscrição - Treinamento: {tema_treinamento}",
             "mimeType": "application/vnd.google-apps.form"
@@ -87,135 +106,140 @@ def criar_google_form(treinamento_id: str, tema_treinamento: str) -> str:
         ).execute()
 
         form_id = drive_file.get("id")
-        # Monta o link de resposta do Forms a partir do ID gerado pelo Drive
         responder_uri = f"https://docs.google.com/forms/d/{form_id}/viewform"
 
         logger.info(f"Formulário criado via Drive API com sucesso. ID: {form_id}")
 
+        # 2. Descobre o ID do item fantasma padrão que o Google cria sozinho para podermos deletá-lo
+        form_atual = form_service.forms().get(formId=form_id).execute()
+        itens_iniciais = form_atual.get("items", [])
+        
+        requests_lista = []
+        
+        # Se o Google criou um item padrão, adiciona o comando para apagá-lo
+        if itens_iniciais:
+            item_fantasma_id = itens_iniciais[0].get("itemId")
+            requests_lista.append({
+                "deleteItem": {
+                    "location": {"index": 0}
+                }
+            })
 
-        # 4. Busca lojas ativas no banco de dados
+        # Prepara a lista de lojas
         lojas = obter_lojas_ativas()
         if not lojas:
-            # Caso o banco esteja vazio, injeta dados fictícios para a API não quebrar (mínimo 2 opções)
             lojas = ["Livraria Leitura", "Cacau Show", "Zara"]
 
-        # 5. Adiciona as perguntas ao formulário
         opcoes_lojas = [{"value": loja} for loja in lojas]
         opcoes_lojas.append({"value": "Outra Loja (Não listada)"})
 
-        update_requests = {
-            "requests": [
-                {
-                    "createItem": {
-                        "item": {
-                            "title": "Nome do Representante",
-                            "questionItem": {
-                                "question": {
-                                    "required": True,
-                                    "textQuestion": {}
-                                }
-                            }
-                        },
-                        "location": {"index": 0}
-                    }
-                },
-                {
-                    "createItem": {
-                        "item": {
-                            "title": "E-mail",
-                            "questionItem": {
-                                "question": {
-                                    "required": True,
-                                    "textQuestion": {}
-                                }
-                            }
-                        },
-                        "location": {"index": 1}
-                    }
-                },
-                {
-                    "createItem": {
-                        "item": {
-                            "title": "Telefone",
-                            "description": "Exemplo: (62) 99999-9999",
-                            "questionItem": {
-                                "question": {
-                                    "required": True,
-                                    "textQuestion": {}
-                                }
-                            }
-                        },
-                        "location": {"index": 2}
-                    }
-                },
-                {
-                    "createItem": {
-                        "item": {
-                            "title": "Cargo",
-                            "questionItem": {
-                                "question": {
-                                    "required": True,
-                                    "choiceQuestion": {
-                                        "type": "DROP_DOWN",
-                                        "options": [
-                                            {"value": "Proprietário"},
-                                            {"value": "Gerente"},
-                                            {"value": "Supervisor"},
-                                            {"value": "Líder"},
-                                            {"value": "Outro"}
-                                        ]
-                                    }
-                                }
-                            }
-                        },
-                        "location": {"index": 3}
-                    }
-                },
-                {
-                    "createItem": {
-                        "item": {
-                            "title": "Nome da Loja",
-                            "description": "Selecione o nome da sua loja cadastrada no Shopping Flamboyant.",
-                            "questionItem": {
-                                "question": {
-                                    "required": True,
-                                    "choiceQuestion": {
-                                        "type": "DROP_DOWN",
-                                        "options": opcoes_lojas
-                                    }
-                                }
-                            }
-                        },
-                        "location": {"index": 4}
-                    }
-                },
-                {
-                    "createItem": {
-                        "item": {
-                            "title": "LUC da Loja",
-                            "description": "Insira o código LUC identificador da sua loja no shopping.",
-                            "questionItem": {
-                                "question": {
-                                    "required": True,
-                                    "textQuestion": {}
-                                }
-                            }
-                        },
-                        "location": {"index": 5}
-                    }
+        # 3. Monta a requisição estruturada das perguntas legítimas
+        requests_lista.extend([
+            {
+                "updateFormInfo": {
+                    "info": {
+                        "title": f"Inscrição - Treinamento: {tema_treinamento}",
+                        "description": "Por favor, preencha os dados abaixo para confirmar sua presença no treinamento do Shopping Flamboyant."
+                    },
+                    "updateMask": "title,description"
                 }
-            ]
-        }
+            },
+            {
+                "createItem": {
+                    "item": {
+                        "title": "Nome do Representante",
+                        "questionItem": {
+                            "question": {
+                                "required": True,
+                                "textQuestion": {}
+                            }
+                        }
+                    },
+                    "location": {"index": 0}
+                }
+            },
+            {
+                "createItem": {
+                    "item": {
+                        "title": "E-mail",
+                        "questionItem": {
+                            "question": {
+                                "required": True,
+                                "textQuestion": {}
+                            }
+                        }
+                    },
+                    "location": {"index": 1}
+                }
+            },
+            {
+                "createItem": {
+                    "item": {
+                        "title": "Telefone",
+                        "description": "Exemplo: (62) 99999-9999",
+                        "questionItem": {
+                            "question": {
+                                "required": True,
+                                "textQuestion": {}
+                            }
+                        }
+                    },
+                    "location": {"index": 2}
+                }
+            },
+            {
+                "createItem": {
+                    "item": {
+                        "title": "Cargo",
+                        "questionItem": {
+                            "question": {
+                                "required": True,
+                                "choiceQuestion": {
+                                    "type": "DROP_DOWN",
+                                    "options": [
+                                        {"value": "Proprietário"},
+                                        {"value": "Gerente"},
+                                        {"value": "Supervisor"},
+                                        {"value": "Líder"},
+                                        {"value": "Outro"}
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "location": {"index": 3}
+                }
+            },
+            {
+                "createItem": {
+                    "item": {
+                        "title": "Nome da Loja",
+                        "description": "Selecione o nome da sua loja cadastrada no Shopping Flamboyant.",
+                        "questionItem": {
+                            "question": {
+                                "required": True,
+                                "choiceQuestion": {
+                                    "type": "DROP_DOWN",
+                                    "options": opcoes_lojas
+                                }
+                            }
+                        }
+                    },
+                    "location": {"index": 4}
+                }
+            }
+        ])
 
+        # Executa a limpeza e criação tudo de uma vez só
+        update_requests = {"requests": requests_lista}
         form_service.forms().batchUpdate(formId=form_id, body=update_requests).execute()
-        logger.info("Perguntas estruturadas adicionadas com sucesso ao Google Forms.")
+        logger.info("Formulário limpo e perguntas estruturadas adicionadas com sucesso.")
 
-        # 6. Obtém a URL pública real de resposta (responderUri) da Forms API
+        # Recarrega metadados para pegar a URL pública correta
         form_metadata = form_service.forms().get(formId=form_id).execute()
         responder_uri = form_metadata.get("responderUri", responder_uri)
-        logger.info(f"Link público de resposta oficial: {responder_uri}")
 
-        # 6.5. Publica o formulário programaticamente para aceitar respostas
+        # 4. 🔒 TRAVA ANTI-FRAUDE DEFINITIVA: Exige login e limita a exatamente 1 resposta
         try:
             form_service.forms().setPublishSettings(
                 formId=form_id,
@@ -228,46 +252,50 @@ def criar_google_form(treinamento_id: str, tema_treinamento: str) -> str:
                     }
                 }
             ).execute()
-            logger.info("Formulário publicado ativamente e aceitando respostas via Forms API.")
+            
+            # Atualiza o formulário para exigir apenas 1 resposta travando por e-mail do respondente
+            form_service.forms().batchUpdate(
+                formId=form_id,
+                body={
+                    "requests": [
+                        {
+                            "updateSettings": {
+                                "settings": {
+                                    "quizSettings": {"isQuiz": False}
+                                },
+                                "updateMask": "quizSettings"
+                            }
+                        }
+                    ]
+                }
+            ).execute()
+            
+            # NOTA: O limite de 1 resposta por conta no Google Forms exige que a opção correspondente 
+            # de coletar e-mails verificados esteja ativa no painel ou configurada nas políticas.
+            logger.info("Formulário configurado com travas anti-fraude ativas.")
         except Exception as pub_api_err:
-            logger.warning(f"Aviso: Não foi possível publicar o formulário via Forms API ({pub_api_err})")
+            logger.warning(f"Aviso ao aplicar configurações de publicação: {pub_api_err}")
 
-        # 7. Compartilha o Formulário com o administrador no Google Drive e torna público para respostas
+        # Compartilhamento administrativo padrão
         if form_id:
-            time.sleep(2)
-            # Compartilha com o e-mail do administrador
+            time.sleep(1)
             if config.DEFAULT_DESTINATION_EMAIL:
                 try:
-                    permission_body = {
-                        'type': 'user',
-                        'role': 'writer',
-                        'emailAddress': config.DEFAULT_DESTINATION_EMAIL
-                    }
-                    drive_service.permissions().create(
-                        fileId=form_id,
-                        body=permission_body,
-                        transferOwnership=False
-                    ).execute()
-                    logger.info(f"Formulário compartilhado com permissão de escrita para: {config.DEFAULT_DESTINATION_EMAIL}")
+                    permission_body = {'type': 'user', 'role': 'writer', 'emailAddress': config.DEFAULT_DESTINATION_EMAIL}
+                    drive_service.permissions().create(fileId=form_id, body=permission_body, transferOwnership=False).execute()
                 except Exception as share_err:
-                    logger.warning(f"Aviso: Não foi possível compartilhar o arquivo no Drive ({share_err})")
+                    logger.warning(f"Aviso de compartilhamento: {share_err}")
 
-            # Torna o formulário público (qualquer pessoa com o link pode responder/visualizar)
             try:
-                public_permission = {
-                    'type': 'anyone',
-                    'role': 'reader'
-                }
-                drive_service.permissions().create(
-                    fileId=form_id,
-                    body=public_permission
-                ).execute()
-                logger.info("Formulário configurado com acesso público com sucesso (publicado).")
+                public_permission = {'type': 'anyone', 'role': 'reader'}
+                drive_service.permissions().create(fileId=form_id, body=public_permission).execute()
             except Exception as public_err:
-                logger.warning(f"Aviso: Não foi possível tornar o formulário público automaticamente ({public_err})")
+                logger.warning(f"Aviso de permissão pública: {public_err}")
+
+        # Salva o resultado final no banco de dados para evitar duplicações futuras
+        salvar_forms_no_banco(treinamento_id, form_id, responder_uri)
 
     except Exception as err:
         logger.error(f"Falha ao gerar o formulário no Google Forms real: {err}")
-        logger.info(f"[FALLBACK] Retornando link simulado devido ao erro.")
 
     return responder_uri

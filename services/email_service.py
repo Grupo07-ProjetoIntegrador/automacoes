@@ -24,16 +24,16 @@ def enviar_email_formulario(tema_treinamento: str, link_formulario: str, email_d
     # Corpo do e-mail com layout premium
     html_content = f"""
     <!DOCTYPE html>
-    <html>
+    <html lang="pt-BR">
     <head>
         <meta charset="utf-8">
         <style>
             body {{
                 font-family: 'Outfit', 'Inter', 'Helvetica Neue', Arial, sans-serif;
-                background-color: #f3f4f6;
+                background-color: #F7F4EF;
                 margin: 0;
                 padding: 0;
-                color: #1f2937;
+                color: #1F2937;
             }}
             .container {{
                 max-width: 600px;
@@ -41,11 +41,11 @@ def enviar_email_formulario(tema_treinamento: str, link_formulario: str, email_d
                 background-color: #ffffff;
                 border-radius: 16px;
                 overflow: hidden;
-                box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-                border: 1px solid #e5e7eb;
+                box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+                border: 1px solid #E5E7EB;
             }}
             .header {{
-                background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+                background: linear-gradient(135deg, #8B1A1A 0%, #D93030 100%);
                 padding: 40px 20px;
                 text-align: center;
                 color: #ffffff;
@@ -66,21 +66,21 @@ def enviar_email_formulario(tema_treinamento: str, link_formulario: str, email_d
                 font-size: 16px;
             }}
             .highlight-box {{
-                background-color: #eff6ff;
-                border-left: 4px solid #3b82f6;
+                background-color: #FFF5F5;
+                border-left: 4px solid #D93030;
                 padding: 15px;
                 margin: 25px 0;
                 border-radius: 0 8px 8px 0;
             }}
             .highlight-box strong {{
-                color: #1e3a8a;
+                color: #8B1A1A;
             }}
             .button-wrapper {{
                 text-align: center;
                 margin: 35px 0 15px 0;
             }}
             .btn {{
-                background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+                background: linear-gradient(135deg, #D93030 0%, #8B1A1A 100%);
                 color: #ffffff !important;
                 text-decoration: none;
                 padding: 14px 30px;
@@ -88,7 +88,7 @@ def enviar_email_formulario(tema_treinamento: str, link_formulario: str, email_d
                 font-weight: 600;
                 border-radius: 30px;
                 display: inline-block;
-                box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2), 0 2px 4px -1px rgba(37, 99, 235, 0.1);
+                box-shadow: 0 4px 6px -1px rgba(217, 48, 48, 0.2);
                 transition: transform 0.2s ease, box-shadow 0.2s ease;
             }}
             .footer {{

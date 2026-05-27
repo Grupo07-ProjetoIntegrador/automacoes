@@ -1,3 +1,16 @@
+import sys
+import os
+
+# Pega o caminho absoluto da pasta onde o cron_lembretes.py está (C:/.../projetoflamboyant/automacoes)
+pasta_automacoes = os.path.dirname(os.path.abspath(__file__))
+
+# Pega a pasta pai direto, garantindo o caminho absoluto real da raiz do projeto
+raiz_projeto = os.path.dirname(pasta_automacoes)
+
+# Injeta a raiz do projeto no topo da lista de busca do Python se ela já não estiver lá
+if raiz_projeto not in sys.path:
+    sys.path.insert(0, raiz_projeto)
+
 import argparse
 import logging
 from datetime import datetime, timedelta

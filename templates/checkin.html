@@ -9,15 +9,15 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --primary: #2563eb;
-            --primary-dark: #1d4ed8;
+            --primary: #D93030;
+            --primary-dark: #8B1A1A;
             --success: #10b981;
-            --danger: #ef4444;
-            --background: #0f172a;
-            --card-bg: rgba(30, 41, 59, 0.7);
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --glow: rgba(37, 99, 235, 0.4);
+            --danger: #D93030;
+            --background: #F7F4EF;
+            --card-bg: #FFFFFF;
+            --text-main: #1F2937;
+            --text-muted: #6B7280;
+            --glow: rgba(217, 48, 48, 0.2);
         }
 
         * {
@@ -37,20 +37,18 @@
             padding: 20px;
             overflow-x: hidden;
             background-image: 
-                radial-gradient(circle at 10% 20%, rgba(37, 99, 235, 0.15) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(16, 185, 129, 0.1) 0%, transparent 40%);
+                radial-gradient(circle at 10% 20%, rgba(139, 26, 26, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(217, 48, 48, 0.03) 0%, transparent 40%);
         }
 
         .card {
             background-color: var(--card-bg);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            border: 1px solid #E5E7EB;
             border-radius: 24px;
             padding: 40px 30px;
             width: 100%;
             max-width: 420px;
-            box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
             text-align: center;
             animation: fadeInUp 0.8s ease-out;
             position: relative;
@@ -70,7 +68,7 @@
         .header h1 {
             font-size: 28px;
             font-weight: 700;
-            background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+            background: linear-gradient(135deg, #8B1A1A 0%, #D93030 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             margin-bottom: 8px;
@@ -85,7 +83,7 @@
 
         /* Status de Geolocalização */
         .gps-status {
-            background: rgba(255, 255, 255, 0.05);
+            background: #F9FAFB;
             border-radius: 16px;
             padding: 16px;
             margin-bottom: 30px;
@@ -93,7 +91,7 @@
             align-items: center;
             justify-content: center;
             gap: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            border: 1px solid #E5E7EB;
             transition: all 0.3s ease;
         }
 
@@ -149,8 +147,8 @@
 
         .input-control {
             width: 100%;
-            background: rgba(15, 23, 42, 0.6);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: #F9FAFB;
+            border: 1px solid #E5E7EB;
             border-radius: 12px;
             padding: 14px 16px;
             color: var(--text-main);
@@ -163,6 +161,7 @@
         .input-control:focus {
             border-color: var(--primary);
             box-shadow: 0 0 0 3px var(--glow);
+            background: #FFFFFF;
         }
 
         /* Botão de Check-in */
@@ -181,12 +180,12 @@
             align-items: center;
             justify-content: center;
             gap: 10px;
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+            box-shadow: 0 4px 12px rgba(217, 48, 48, 0.2);
         }
 
         .btn-checkin:disabled {
-            background: #334155;
-            color: #64748b;
+            background: #E5E7EB;
+            color: #9CA3AF;
             cursor: not-allowed;
             box-shadow: none;
         }
@@ -217,16 +216,16 @@
         }
 
         .feedback.success {
-            background-color: rgba(16, 185, 129, 0.15);
-            border: 1px solid rgba(16, 185, 129, 0.3);
-            color: #34d399;
+            background-color: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            color: #059669;
             display: block;
         }
 
         .feedback.error {
-            background-color: rgba(239, 68, 68, 0.15);
-            border: 1px solid rgba(239, 68, 68, 0.3);
-            color: #f87171;
+            background-color: rgba(217, 48, 48, 0.1);
+            border: 1px solid rgba(217, 48, 48, 0.2);
+            color: #B91C1C;
             display: block;
         }
 
@@ -301,10 +300,11 @@
                 Math.sin(dLat/2) * Math.sin(dLat/2) +
                 Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
                 Math.sin(dLon/2) * Math.sin(dLon/2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-c || a === 1 ? 0 : 1 - a)); 
-            // Uma aproximação simplificada segura de Haversine:
-            const c_safe = 2 * Math.asin(Math.sqrt(a));
-            return R * c_safe;
+            
+            // Garante que o valor fique estritamente dentro dos limites da função asin [0, 1]
+            const a_clamped = Math.min(1, Math.max(0, a));
+            const c = 2 * Math.asin(Math.sqrt(a_clamped));
+            return R * c;
         }
 
         function setGpsStatus(state, text) {
