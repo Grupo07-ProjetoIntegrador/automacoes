@@ -1,16 +1,93 @@
-import smtplib
+import base64
 import logging
+import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+from google.auth.transport.requests import Request as GoogleRequest
+from googleapiclient.errors import HttpError
+from google.oauth2.credentials import Credentials as OAuth2Credentials
+from googleapiclient.discovery import build
+
+from database import db_cursor
 import config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def enviar_email_formulario(tema_treinamento: str, link_formulario: str, email_destinatario: str = None) -> bool:
+
+def _obter_credenciais_usuario(user_id: str, scopes: list[str]):
+    if not user_id:
+        return None
+
+    client_id = os.getenv("GOOGLE_CLIENT_ID")
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        logger.warning("GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET ausentes; nao foi possivel usar Gmail API do usuario.")
+        return None
+
+    try:
+        with db_cursor() as cursor:
+            cursor.execute(
+                "SELECT access_token, refresh_token, token_type, expires_at FROM google_oauth_tokens WHERE user_id = %s LIMIT 1;",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            access_token, refresh_token, token_type, expires_at = row
+            creds = OAuth2Credentials(
+                token=access_token,
+                refresh_token=refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=client_id,
+                client_secret=client_secret,
+                scopes=scopes,
+            )
+
+            if creds.expired and creds.refresh_token:
+                logger.info("Atualizando credencial do usuario para envio de e-mail via Gmail API...")
+                creds.refresh(GoogleRequest())
+                with db_cursor() as update_cursor:
+                    update_cursor.execute(
+                        "UPDATE google_oauth_tokens SET access_token = %s, expires_at = %s, token_type = %s WHERE user_id = %s;",
+                        (creds.token, creds.expiry, creds.token_type or token_type, user_id)
+                    )
+
+            return creds
+    except Exception as err:
+        logger.warning(f"Nao foi possivel carregar credenciais do usuario para Gmail API: {err}")
+        return None
+
+
+def _enviar_via_gmail_api(creds, destinatario: str, assunto: str, html_content: str) -> bool:
+    gmail_service = build("gmail", "v1", credentials=creds)
+
+    logger.info(f"Enviando e-mail via Gmail API para {destinatario}")
+
+    message = MIMEMultipart("alternative")
+    message["To"] = destinatario
+    message["Subject"] = assunto
+    message.attach(MIMEText(html_content, "html"))
+
+    raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+
+    gmail_service.users().messages().send(
+        userId="me",
+        body={"raw": raw_message},
+    ).execute()
+    return True
+
+def enviar_email_formulario(
+    tema_treinamento: str,
+    link_formulario: str,
+    email_destinatario: str = None,
+    user_id: str = None,
+) -> bool:
     """
     Dispara um e-mail HTML moderno contendo o link de inscrição para o treinamento.
-    Caso as credenciais de SMTP estejam incompletas, simula o envio no log.
+    Prioriza Gmail API usando as credenciais do usuario conectado.
     """
     destinatario = email_destinatario or config.DEFAULT_DESTINATION_EMAIL
     
@@ -130,38 +207,23 @@ def enviar_email_formulario(tema_treinamento: str, link_formulario: str, email_d
     </html>
     """
 
-    # Verifica se os dados básicos de SMTP foram definidos no .env
-    if not config.SMTP_EMAIL or not config.SMTP_PASSWORD:
-        logger.warning(
-            "Credenciais SMTP (SMTP_EMAIL/SMTP_PASSWORD) ausentes no .env. "
-            "Simulando envio de e-mail..."
-        )
-        logger.info(f"[SIMULAÇÃO E-MAIL] De: sistema@flamboyant.com.br -> Para: {destinatario}")
-        logger.info(f"[SIMULAÇÃO E-MAIL] Assunto: {assunto}")
-        logger.info(f"[SIMULAÇÃO E-MAIL] Conteúdo do Link: {link_formulario}")
-        return True
+    gmail_scopes = ["https://www.googleapis.com/auth/gmail.send"]
+    usuario_creds = _obter_credenciais_usuario(user_id, gmail_scopes)
+    if usuario_creds:
+        try:
+            return _enviar_via_gmail_api(usuario_creds, destinatario, assunto, html_content)
+        except HttpError as gmail_err:
+            logger.error(f"Falha no Gmail API do usuario: {gmail_err}")
+            return False
+        except Exception as gmail_err:
+            logger.warning(
+                f"Falha ao enviar e-mail via Gmail API do usuario ({gmail_err})"
+            )
+            return False
 
-    try:
-        # Monta a mensagem
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = assunto
-        msg['From'] = config.SMTP_EMAIL
-        msg['To'] = destinatario
-
-        # Adiciona o HTML do e-mail
-        msg.attach(MIMEText(html_content, 'html'))
-
-        # Abre conexão com o servidor SMTP
-        server = smtplib.SMTP(config.SMTP_SERVER, config.SMTP_PORT)
-        server.starttls()  # Upgrade da conexão para segura TLS
-        server.login(config.SMTP_EMAIL, config.SMTP_PASSWORD)
-        
-        # Envia e-mail
-        server.sendmail(config.SMTP_EMAIL, destinatario, msg.as_string())
-        server.quit()
-
-        logger.info(f"E-mail de convite enviado com sucesso para: {destinatario}")
-        return True
-    except Exception as e:
-        logger.error(f"Falha ao enviar e-mail via SMTP real: {e}")
+    if user_id:
+        logger.warning("user_id informado, mas nao ha credenciais Gmail válidas para esse usuario.")
         return False
+
+    logger.warning("Nenhum user_id informado; envio por Gmail do usuario nao disponivel.")
+    return False

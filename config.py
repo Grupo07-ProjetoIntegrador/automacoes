@@ -12,6 +12,13 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # Configurações de Integração com o Backend Go
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8080")
 
+# URL publica do servico de automacoes (ex: ngrok) para receber webhooks
+AUTOMACOES_PUBLIC_URL = os.getenv("AUTOMACOES_PUBLIC_URL", "")
+
+# Apps Script Web App para registrar gatilhos automaticos por formulario
+APPS_SCRIPT_WEBAPP_URL = os.getenv("APPS_SCRIPT_WEBAPP_URL", "")
+APPS_SCRIPT_TOKEN = os.getenv("APPS_SCRIPT_TOKEN", "")
+
 # Configurações de Google APIs
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")
 

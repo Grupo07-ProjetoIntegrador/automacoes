@@ -2,14 +2,14 @@ import os
 import logging
 from pathlib import Path
 import requests
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 
 import config
 from database import db_cursor, test_connection
-from forms_handler import criar_google_form
+from forms_handler import criar_google_form, apagar_formulario
 from services.email_service import enviar_email_formulario
 
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +36,7 @@ class GerarFormsRequest(BaseModel):
     treinamento_id: str
     tema: str
     email_destino: str = None  # Opcional, se fornecido o link é enviado para ele
+    user_id: str = None  # Optional Supabase user id to create the form in the user's account
 
 class WebhookInscricaoRequest(BaseModel):
     treinamento_id: str
@@ -44,7 +45,11 @@ class WebhookInscricaoRequest(BaseModel):
     telefone: str
     cargo: str
     nome_loja: str
-    luc: str
+    luc: str = ""
+
+class ApagarFormsRequest(BaseModel):
+    treinamento_id: str
+    user_id: str = None
 
 # ==================== ROTAS DA API ====================
 
@@ -73,14 +78,20 @@ def checkin_page(treinamento_id: str = Query(..., description="ID do treinamento
 def background_gerar_e_enviar(req: GerarFormsRequest):
     """Tarefa em background para gerar o Forms e disparar e-mail sem travar a requisição HTTP."""
     try:
-        # 1. Cria o forms
-        link_forms = criar_google_form(req.treinamento_id, req.tema)
+        # 1. Cria o forms (tenta usar credenciais do user se fornecido)
+        link_forms = criar_google_form(req.treinamento_id, req.tema, req.user_id)
         
         # 2. Dispara e-mail
         dest = req.email_destino or config.DEFAULT_DESTINATION_EMAIL
-        enviar_email_formulario(req.tema, link_forms, dest)
-        
-        logger.info(f"Processo de geração e envio de e-mail concluído para Treinamento ID {req.treinamento_id}")
+        email_enviado = enviar_email_formulario(req.tema, link_forms, dest, req.user_id)
+
+        if email_enviado:
+            logger.info(f"Processo de geração e envio de e-mail concluído para Treinamento ID {req.treinamento_id}")
+        else:
+            logger.warning(
+                f"Formulário criado, mas o e-mail nao foi enviado para Treinamento ID {req.treinamento_id}. "
+                "Verifique se a conta Google conectada foi reautorizada com o escopo gmail.send."
+            )
     except Exception as e:
         logger.error(f"Erro na tarefa em background de geração de forms: {e}")
 
@@ -104,12 +115,36 @@ def endpoint_gerar_forms(req: GerarFormsRequest, background_tasks: BackgroundTas
         "message": f"A geração do Google Forms para o treinamento '{req.tema}' foi iniciada em segundo plano."
     }
 
+@app.post("/api/automacoes/apagar-form")
+def endpoint_apagar_form(req: ApagarFormsRequest):
+    """Remove o vinculo do formulario e tenta apagar o arquivo no Google Drive."""
+    with db_cursor() as cursor:
+        cursor.execute("SELECT id FROM treinamentos WHERE id = %s;", (req.treinamento_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Treinamento informado não existe no banco de dados.")
+
+    result = apagar_formulario(req.treinamento_id, req.user_id)
+    if not result.get("found"):
+        raise HTTPException(status_code=404, detail="Formulario ainda não foi gerado.")
+
+    return {
+        "status": "deleted",
+        "form_id": result.get("form_id", ""),
+        "drive_deleted": result.get("drive_deleted", False)
+    }
+
 @app.post("/api/automacoes/webhook-inscricao")
-def endpoint_webhook_inscricao(req: WebhookInscricaoRequest):
+def endpoint_webhook_inscricao(req: WebhookInscricaoRequest, request: Request):
     """
     Recebe as respostas do Google Forms via Apps Script.
     Valida se o treinamento existe e repassa em formato estruturado para o backend Go persistir.
     """
+    # 0. Valida token opcional
+    if config.APPS_SCRIPT_TOKEN:
+        token = request.headers.get("X-Automacoes-Token", "")
+        if token != config.APPS_SCRIPT_TOKEN:
+            raise HTTPException(status_code=401, detail="Token do webhook invalido.")
+
     # 1. Valida se o treinamento existe
     with db_cursor() as cursor:
         cursor.execute("SELECT id FROM treinamentos WHERE id = %s;", (req.treinamento_id,))
@@ -121,7 +156,7 @@ def endpoint_webhook_inscricao(req: WebhookInscricaoRequest):
     
     payload = {
         "treinamento_id": req.treinamento_id,
-        "luc": req.luc,
+        "luc": req.luc or "",
         "nome_loja": req.nome_loja,
         "nome_representante": req.nome_representante,
         "email": req.email,

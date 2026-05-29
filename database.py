@@ -12,6 +12,7 @@ def get_connection():
 def db_cursor():
     """Context manager para gerenciar a abertura/fechamento do cursor e transações (commit/rollback)."""
     conn = None
+    cursor = None
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -23,7 +24,8 @@ def db_cursor():
         raise e
     finally:
         if conn:
-            cursor.close()
+            if cursor:
+                cursor.close()
             conn.close()
 
 def test_connection():

@@ -5,6 +5,7 @@
   "client_id": "seu-client-id.apps.googleusercontent.com",
   "client_secret": "seu_client_secret",
   "scopes": [
-    "https://www.googleapis.com/auth/spreadsheets"
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/forms.body"
   ]
 }
