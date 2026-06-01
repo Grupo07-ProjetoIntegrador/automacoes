@@ -10,7 +10,7 @@ from pydantic import BaseModel, EmailStr
 import config
 from database import db_cursor, test_connection
 from forms_handler import criar_google_form, apagar_formulario
-from services.email_service import enviar_email_formulario
+from services.email_service import enviar_email_formulario, enviar_email_validacao_presenca
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,9 +34,32 @@ app.add_middleware(
 
 class GerarFormsRequest(BaseModel):
     treinamento_id: str
-    tema: str
+    treinamento: dict
     email_destino: str = None  # Opcional, se fornecido o link é enviado para ele
     user_id: str = None  # Optional Supabase user id to create the form in the user's account
+
+
+class ConviteDestinatarioRequest(BaseModel):
+    nome: str = ""
+    email: EmailStr
+    segmento: str = ""
+
+
+class DisparoConviteRequest(BaseModel):
+    treinamento_id: str
+    treinamento: dict
+    modo: str = "individual"
+    segmento_loja: str = ""
+    segmento_treinamento: str = ""
+    destinatarios: list[ConviteDestinatarioRequest] = []
+    user_id: str = None
+
+
+class ValidacaoPresencaRequest(BaseModel):
+    treinamento_id: str
+    treinamento: dict
+    destinatario: ConviteDestinatarioRequest
+    user_id: str = None
 
 class WebhookInscricaoRequest(BaseModel):
     treinamento_id: str
@@ -79,11 +102,11 @@ def background_gerar_e_enviar(req: GerarFormsRequest):
     """Tarefa em background para gerar o Forms e disparar e-mail sem travar a requisição HTTP."""
     try:
         # 1. Cria o forms (tenta usar credenciais do user se fornecido)
-        link_forms = criar_google_form(req.treinamento_id, req.tema, req.user_id)
+        link_forms = criar_google_form(req.treinamento_id, req.treinamento, req.user_id)
         
         # 2. Dispara e-mail
         dest = req.email_destino or config.DEFAULT_DESTINATION_EMAIL
-        email_enviado = enviar_email_formulario(req.tema, link_forms, dest, req.user_id)
+        email_enviado = enviar_email_formulario(req.treinamento, link_forms, dest, req.user_id)
 
         if email_enviado:
             logger.info(f"Processo de geração e envio de e-mail concluído para Treinamento ID {req.treinamento_id}")
@@ -112,7 +135,119 @@ def endpoint_gerar_forms(req: GerarFormsRequest, background_tasks: BackgroundTas
     
     return {
         "status": "processing",
-        "message": f"A geração do Google Forms para o treinamento '{req.tema}' foi iniciada em segundo plano."
+        "message": f"A geração do Google Forms para o treinamento '{req.treinamento.get('tema', req.treinamento_id)}' foi iniciada em segundo plano."
+    }
+
+
+def background_disparar_convites(req: DisparoConviteRequest):
+    try:
+        link_forms = criar_google_form(req.treinamento_id, req.treinamento, req.user_id)
+
+        if req.modo == "segmento_treinamento" and req.segmento_treinamento:
+            target = (req.segmento_treinamento or "").strip().lower()
+            # Se o segmento do treinamento for 'geral', entende-se como atingir todos
+            if target == "geral":
+                destinatarios = req.destinatarios
+            else:
+                destinatarios = [
+                    destinatario
+                    for destinatario in req.destinatarios
+                    if (destinatario.segmento or "").strip().lower() == target
+                ]
+        elif req.modo == "segmento_loja" and req.segmento_loja:
+            seg_loja = (req.segmento_loja or "").strip().lower()
+            if seg_loja == "lojas":
+                # 'Lojas' = todas exceto Alimentação e Academia
+                destinatarios = [
+                    destinatario
+                    for destinatario in req.destinatarios
+                    if (destinatario.segmento or "").strip().lower() not in ("alimentação", "academia", "alimentacao")
+                ]
+            else:
+                destinatarios = [
+                    destinatario
+                    for destinatario in req.destinatarios
+                    if (destinatario.segmento or "").strip().lower() == seg_loja
+                ]
+        else:
+            destinatarios = req.destinatarios
+
+        enviados = 0
+        for destinatario in destinatarios:
+            if enviar_email_formulario(
+                req.treinamento,
+                link_forms,
+                destinatario.email,
+                req.user_id,
+                nome_destinatario=destinatario.nome,
+            ):
+                enviados += 1
+
+        logger.info(
+            "Disparo de convites concluído para treinamento %s: %s destinatário(s)",
+            req.treinamento_id,
+            enviados,
+        )
+    except Exception as e:
+        logger.error(f"Erro no disparo de convites em background: {e}")
+
+
+@app.post("/api/automacoes/disparar-convite")
+def endpoint_disparar_convite(req: DisparoConviteRequest, background_tasks: BackgroundTasks):
+    with db_cursor() as cursor:
+        cursor.execute("SELECT id FROM treinamentos WHERE id = %s;", (req.treinamento_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Treinamento informado não existe no banco de dados.")
+
+    if not req.destinatarios:
+        raise HTTPException(status_code=400, detail="Nenhum destinatário informado para o disparo.")
+
+    background_tasks.add_task(background_disparar_convites, req)
+
+    return {
+        "status": "processing",
+        "message": "O disparo segmentado de convites foi iniciado em segundo plano.",
+        "destinatarios": len(req.destinatarios),
+        "modo": req.modo,
+    }
+
+
+def background_notificar_presenca_validada(req: ValidacaoPresencaRequest):
+    try:
+        enviou = enviar_email_validacao_presenca(
+            req.treinamento,
+            req.destinatario.email,
+            nome_destinatario=req.destinatario.nome,
+            user_id=req.user_id,
+        )
+        if enviou:
+            logger.info(
+                "E-mail de presença validada enviado para %s no treinamento %s",
+                req.destinatario.email,
+                req.treinamento_id,
+            )
+        else:
+            logger.warning(
+                "Não foi possível enviar o e-mail de presença validada para %s no treinamento %s",
+                req.destinatario.email,
+                req.treinamento_id,
+            )
+    except Exception as e:
+        logger.error(f"Erro ao notificar presença validada: {e}")
+
+
+@app.post("/api/automacoes/notificar-presenca-validada")
+def endpoint_notificar_presenca_validada(req: ValidacaoPresencaRequest, background_tasks: BackgroundTasks):
+    with db_cursor() as cursor:
+        cursor.execute("SELECT id FROM treinamentos WHERE id = %s;", (req.treinamento_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Treinamento informado não existe no banco de dados.")
+
+    background_tasks.add_task(background_notificar_presenca_validada, req)
+
+    return {
+        "status": "processing",
+        "message": "O e-mail de presença validada foi iniciado em segundo plano.",
     }
 
 @app.post("/api/automacoes/apagar-form")

@@ -1,6 +1,8 @@
 import base64
 import logging
 import os
+import smtplib
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -14,6 +16,252 @@ import config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _obter_logo_base64_local() -> str:
+    """
+    Busca o arquivo de imagem local e converte para Base64.
+    Se o arquivo não existir, retorna um fallback ou string vazia para não quebrar o sistema.
+    """
+    # Nome do arquivo da logo que deve estar na mesma pasta do script (ou ajuste o caminho)
+    caminho_logo = os.path.join(os.path.dirname(__file__), "flamboyant-logo.png")
+    
+    if os.path.exists(caminho_logo):
+        try:
+            with open(caminho_logo, "rb") as image_file:
+                encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
+                return f"data:image/png;base64,{encoded_string}"
+        except Exception as e:
+            logger.error(f"Erro ao ler o arquivo de logo local: {e}")
+    
+    logger.warning("Arquivo 'flamboyant-logo.png' nao encontrado. O e-mail sera gerado sem a logo.")
+    return ""
+
+
+def _valor_treinamento(treinamento, chave: str, default: str = "") -> str:
+    if treinamento is None:
+        return default
+
+    if isinstance(treinamento, dict):
+        valor = treinamento.get(chave, default)
+    else:
+        valor = getattr(treinamento, chave, default)
+
+    if valor is None:
+        return default
+
+    return str(valor).strip() or default
+
+
+def _formatar_data_pt(data_iso: str) -> str:
+    if not data_iso:
+        return ""
+
+    try:
+        data = datetime.strptime(data_iso, "%Y-%m-%d")
+    except ValueError:
+        return data_iso
+
+    meses = [
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+    ]
+    return f"{data.day} de {meses[data.month - 1]} de {data.year}"
+
+
+def _formatar_periodo(treinamento) -> str:
+    data = _formatar_data_pt(_valor_treinamento(treinamento, "data"))
+    horario_inicio = _valor_treinamento(treinamento, "horario_inicio")
+    horario_fim = _valor_treinamento(treinamento, "horario_fim")
+
+    if horario_inicio and horario_fim:
+        return f"{data}<br>Horário: das {horario_inicio} às {horario_fim}"
+    if data:
+        return f"{data}"
+    return ""
+
+
+def _compor_html_convite(treinamento, link_formulario: str, nome_destinatario: str = "") -> str:
+    tema = _valor_treinamento(treinamento, "tema", "Treinamento")
+    descricao = _valor_treinamento(treinamento, "descricao")
+    objetivo = _valor_treinamento(treinamento, "objetivo")
+    local = _valor_treinamento(treinamento, "local")
+    segmento = _valor_treinamento(treinamento, "segmento_alvo")
+    periodo = _formatar_periodo(treinamento)
+
+    saudacao = f"Olá, {nome_destinatario}," if nome_destinatario else "Olá, Parceiro Lojista,"
+    
+    # Carrega a logo dinamicamente do sistema de arquivos
+    logo_src = _obter_logo_base64_local()
+
+    linhas_detalhes = []
+    if periodo:
+        linhas_detalhes.append(f'<tr><td style="padding: 6px 0; font-weight: 700; color: #1F2937; width: 110px; vertical-align: top;">Data/Horário:</td><td style="padding: 6px 0; color: #4B5563; vertical-align: top;">{periodo}</td></tr>')
+    if local:
+        linhas_detalhes.append(f'<tr><td style="padding: 6px 0; font-weight: 700; color: #1F2937; vertical-align: top;">Local:</td><td style="padding: 6px 0; color: #4B5563; vertical-align: top;">{local}</td></tr>')
+    if segmento:
+        linhas_detalhes.append(f'<tr><td style="padding: 6px 0; font-weight: 700; color: #1F2937; vertical-align: top;">Público-Alvo:</td><td style="padding: 6px 0; color: #4B5563; vertical-align: top;">{segmento}</td></tr>')
+    
+    linhas_detalhes.append(f'<tr><td style="padding: 6px 0; font-weight: 700; color: #1F2937; vertical-align: top;">Inscrição:</td><td style="padding: 6px 0; vertical-align: top;"><span style="display: inline-block; background-color: rgba(16, 185, 129, 0.15); color: #10B981; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 700;">Obrigatória</span></td></tr>')
+
+    tabela_detalhes_html = f'<table style="width: 100%; border-collapse: collapse; font-size: 14px;">{"".join(linhas_detalhes)}</table>'
+
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <title>Convite de Treinamento - JP Mall Corporativo</title>
+</head>
+<body style="font-family: 'Inter', 'Roboto', system-ui, sans-serif; background-color: #F7F4EF; margin: 0; padding: 40px 20px; color: #1F2937; -webkit-print-color-adjust: exact;">
+    <div style="max-width: 650px; margin: 0 auto; background-color: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);">
+        
+        <div style="background-color: #8B1A1A; padding: 30px 35px; border-bottom: 4px solid #C8A882;">
+            <table style="width: 100%; border-collapse: collapse; border: 0;">
+                <tr>
+                    <td style="padding: 0; vertical-align: middle; text-align: left; width: 140px;">
+                        {"<img src='" + logo_src + "' alt='Logo Flamboyant' style='display: block; width: 130px; height: auto; border: 0;' />" if logo_src else ""}
+                    </td>
+                    <td style="padding: 0; vertical-align: middle; text-align: right;">
+                        <div style="color: #C8A882; text-transform: uppercase; font-size: 11px; letter-spacing: 1.5px; font-weight: 700; margin-bottom: 4px;">JP Mall Corporativo</div>
+                        <h1 style="margin: 0; color: #FFFFFF; font-size: 20px; font-weight: 700; line-height: 1.3;">Desenvolvimento & Excelência:<br>Convite de Treinamento</h1>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        <div style="padding: 40px; line-height: 1.6;">
+            <div style="font-size: 17px; font-weight: 700; color: #1F2937; margin-bottom: 16px;">{saudacao}</div>
+            
+            <p style="color: #4B5563; font-size: 15px; margin-top: 0; margin-bottom: 16px; text-align: justify;">
+                Como parte do nosso compromisso contínuo em <em>elevar para evoluir e envolver para encantar</em>, convidamos sua equipe para participar do treinamento estratégico: <strong>{tema}</strong>.
+            </p>
+
+            {"<p style='color: #4B5563; font-size: 15px; margin-bottom: 16px; text-align: justify;'>" + descricao + "</p>" if descricao else ""}
+            {"<p style='color: #4B5563; font-size: 15px; margin-bottom: 16px;'><strong>Objetivo:</strong> " + objetivo + "</p>" if objetivo else ""}
+
+            <div style="background-color: #F7F4EF; border-left: 4px solid #8B1A1A; padding: 20px; margin: 25px 0; border-radius: 0 8px 8px 0;">
+                <h3 style="margin-top: 0; margin-bottom: 12px; color: #8B1A1A; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Informações do Evento</h3>
+                {tabela_detalhes_html}
+            </div>
+
+            <p style="color: #4B5563; font-size: 15px; margin-bottom: 20px;">
+                As vagas são limitadas para garantir a qualidade da interação. Clique no botão abaixo para preencher o formulário de inscrição oficial e garantir a presença dos seus colaboradores.
+            </p>
+
+            <div style="text-align: center; margin: 35px 0 10px 0;">
+                <a href="{link_formulario}" style="display: inline-block; background-color: #D93030; color: #FFFFFF !important; text-decoration: none; padding: 14px 32px; font-weight: 700; font-size: 14px; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(217, 48, 48, 0.2);" target="_blank">Acessar Formulário de Inscrição</a>
+            </div>
+        </div>
+
+        <div style="background-color: #F9FAFB; border-top: 1px solid #E5E7EB; padding: 30px 40px; text-align: center;">
+            <div style="font-size: 16px; font-weight: 700; color: #8B1A1A; letter-spacing: 1px; margin-bottom: 6px;">GRUPO FLAMBOYANT</div>
+            <div style="font-size: 12px; font-style: italic; color: #C8A882; margin-bottom: 15px;">Elevar para evoluir, envolver para encantar.</div>
+            <div style="font-size: 11px; color: #9CA3AF; line-height: 1.4;">
+                Este é um comunicado oficial automatizado enviado pela Administração do JP Mall Corporativo.<br>
+                © {datetime.now().year} Grupo Flamboyant — Todos os direitos reservados.
+            </div>
+        </div>
+    </div>
+</body>
+</html>"""
+
+
+def _compor_html_validacao_presenca(treinamento, nome_destinatario: str = "") -> str:
+    tema = _valor_treinamento(treinamento, "tema", "Treinamento")
+    local = _valor_treinamento(treinamento, "local")
+    periodo = _formatar_periodo(treinamento)
+    saudacao = f"Olá, {nome_destinatario}," if nome_destinatario else "Olá,"
+
+    # Carrega a logo dinamicamente do sistema de arquivos
+    logo_src = _obter_logo_base64_local()
+
+    linhas_evento = []
+    if periodo:
+        linhas_evento.append(f'<tr><td style="padding: 4px 0; font-weight: 700; color: #1F2937; width: 60px;">Data:</td><td style="padding: 4px 0; color: #4B5563;">{periodo}</td></tr>')
+    if local:
+        linhas_evento.append(f'<tr><td style="padding: 4px 0; font-weight: 700; color: #1F2937;">Local:</td><td style="padding: 4px 0; color: #4B5563;">{local}</td></tr>')
+
+    tabela_evento_html = f'<table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 10px;">{"".join(linhas_evento)}</table>' if linhas_evento else ""
+
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <title>Presença Confirmada - JP Mall Corporativo</title>
+</head>
+<body style="font-family: 'Inter', 'Roboto', system-ui, sans-serif; background-color: #F7F4EF; margin: 0; padding: 40px 20px; color: #1F2937; -webkit-print-color-adjust: exact;">
+    <div style="max-width: 650px; margin: 0 auto; background-color: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);">
+        
+        <div style="background-color: #8B1A1A; padding: 30px 35px; border-bottom: 4px solid #C8A882;">
+            <table style="width: 100%; border-collapse: collapse; border: 0;">
+                <tr>
+                    <td style="padding: 0; vertical-align: middle; text-align: left; width: 140px;">
+                        {"<img src='" + logo_src + "' alt='Logo Flamboyant' style='display: block; width: 130px; height: auto; border: 0;' />" if logo_src else ""}
+                    </td>
+                    <td style="padding: 0; vertical-align: middle; text-align: right;">
+                        <div style="color: #C8A882; text-transform: uppercase; font-size: 12px; letter-spacing: 2px; font-weight: 700; margin-bottom: 4px;">JP Mall Corporativo</div>
+                        <h1 style="margin: 0; color: #FFFFFF; font-size: 22px; font-weight: 700; line-height: 1.3;">Presença Validada com Sucesso</h1>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        <div style="padding: 40px; line-height: 1.6;">
+            <div style="font-size: 17px; font-weight: 700; color: #1F2937; margin-bottom: 16px;">{saudacao}</div>
+            
+            <p style="color: #4B5563; font-size: 15px; margin-top: 0; margin-bottom: 16px;">
+                Sua participação foi registrada e validada com sucesso no sistema para o treinamento <strong>{tema}</strong>.
+            </p>
+            
+            <p style="color: #4B5563; font-size: 15px; margin-bottom: 16px;">
+                Agradecemos o seu empenho e dedicação em evoluir suas competências junto ao ecossistema do shopping. Caso queira consultar, seguem abaixo as informações registradas da sessão:
+            </p>
+
+            {f'<div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; padding: 20px; margin: 20px 0; border-radius: 8px;"><h4 style="margin: 0; color: #8B1A1A; font-size: 14px; font-weight: 700; text-transform: uppercase;">Dados da Sessão</h4>{tabela_evento_html}</div>' if tabela_evento_html else ""}
+
+            <p style="color: #4B5563; font-size: 15px; margin-top: 20px; margin-bottom: 0;">
+                Obrigado por sua valiosa participação e contribuição com a cultura de capacitação e excelência do Grupo Flamboyant.
+            </p>
+        </div>
+
+        <div style="background-color: #F9FAFB; border-top: 1px solid #E5E7EB; padding: 30px 40px; text-align: center;">
+            <div style="font-size: 16px; font-weight: 700; color: #8B1A1A; letter-spacing: 1px; margin-bottom: 6px;">GRUPO FLAMBOYANT</div>
+            <div style="font-size: 12px; font-style: italic; color: #C8A882; margin-bottom: 15px;">Elevar para evoluir, envolver para encantar.</div>
+            <div style="font-size: 11px; color: #9CA3AF; line-height: 1.4;">
+                Este e-mail confirma a presença registrada de forma oficial no ecossistema do Shopping Flamboyant.<br>
+                © {datetime.now().year} Grupo Flamboyant — Todos os direitos reservados.
+            </div>
+        </div>
+    </div>
+</body>
+</html>"""
+
+
+def _enviar_via_smtp(destinatario: str, assunto: str, html_content: str) -> bool:
+    smtp_server = config.SMTP_SERVER
+    smtp_port = config.SMTP_PORT
+    smtp_email = config.SMTP_EMAIL
+    smtp_password = config.SMTP_PASSWORD
+
+    if not smtp_email or not smtp_password:
+        logger.warning("Credenciais SMTP ausentes; envio por SMTP indisponível.")
+        return False
+
+    message = MIMEMultipart("alternative")
+    message["From"] = smtp_email
+    message["To"] = destinatario
+    message["Subject"] = assunto
+    message.attach(MIMEText(html_content, "html"))
+
+    try:
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_email, smtp_password)
+            server.sendmail(smtp_email, [destinatario], message.as_string())
+        return True
+    except Exception as err:
+        logger.error(f"Falha no envio via SMTP: {err}")
+        return False
 
 
 def _obter_credenciais_usuario(user_id: str, scopes: list[str]):
@@ -79,133 +327,23 @@ def _enviar_via_gmail_api(creds, destinatario: str, assunto: str, html_content: 
     ).execute()
     return True
 
+
 def enviar_email_formulario(
-    tema_treinamento: str,
+    treinamento,
     link_formulario: str,
     email_destinatario: str = None,
     user_id: str = None,
+    nome_destinatario: str = "",
 ) -> bool:
-    """
-    Dispara um e-mail HTML moderno contendo o link de inscrição para o treinamento.
-    Prioriza Gmail API usando as credenciais do usuario conectado.
-    """
     destinatario = email_destinatario or config.DEFAULT_DESTINATION_EMAIL
     
     if not destinatario:
         logger.warning("Nenhum e-mail de destino configurado ou fornecido. O e-mail não será enviado.")
         return False
 
-    # Assunto do e-mail
+    tema_treinamento = _valor_treinamento(treinamento, "tema", "Treinamento")
     assunto = f"Inscrições Abertas: Treinamento - {tema_treinamento}"
-
-    # Corpo do e-mail com layout premium
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="pt-BR">
-    <head>
-        <meta charset="utf-8">
-        <style>
-            body {{
-                font-family: 'Outfit', 'Inter', 'Helvetica Neue', Arial, sans-serif;
-                background-color: #F7F4EF;
-                margin: 0;
-                padding: 0;
-                color: #1F2937;
-            }}
-            .container {{
-                max-width: 600px;
-                margin: 40px auto;
-                background-color: #ffffff;
-                border-radius: 16px;
-                overflow: hidden;
-                box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
-                border: 1px solid #E5E7EB;
-            }}
-            .header {{
-                background: linear-gradient(135deg, #8B1A1A 0%, #D93030 100%);
-                padding: 40px 20px;
-                text-align: center;
-                color: #ffffff;
-            }}
-            .header h1 {{
-                margin: 0;
-                font-size: 26px;
-                font-weight: 700;
-                letter-spacing: -0.5px;
-            }}
-            .content {{
-                padding: 40px 30px;
-                line-height: 1.6;
-            }}
-            .content p {{
-                margin-top: 0;
-                margin-bottom: 20px;
-                font-size: 16px;
-            }}
-            .highlight-box {{
-                background-color: #FFF5F5;
-                border-left: 4px solid #D93030;
-                padding: 15px;
-                margin: 25px 0;
-                border-radius: 0 8px 8px 0;
-            }}
-            .highlight-box strong {{
-                color: #8B1A1A;
-            }}
-            .button-wrapper {{
-                text-align: center;
-                margin: 35px 0 15px 0;
-            }}
-            .btn {{
-                background: linear-gradient(135deg, #D93030 0%, #8B1A1A 100%);
-                color: #ffffff !important;
-                text-decoration: none;
-                padding: 14px 30px;
-                font-size: 16px;
-                font-weight: 600;
-                border-radius: 30px;
-                display: inline-block;
-                box-shadow: 0 4px 6px -1px rgba(217, 48, 48, 0.2);
-                transition: transform 0.2s ease, box-shadow 0.2s ease;
-            }}
-            .footer {{
-                background-color: #f9fafb;
-                padding: 20px;
-                text-align: center;
-                font-size: 12px;
-                color: #6b7280;
-                border-top: 1px solid #e5e7eb;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>Treinamento Flamboyant</h1>
-            </div>
-            <div class="content">
-                <p>Olá,</p>
-                <p>Temos a satisfação de anunciar um novo treinamento voltado para o desenvolvimento e integração de nossa equipe de lojistas no Shopping Flamboyant.</p>
-                
-                <div class="highlight-box">
-                    <strong>Tópico do Evento:</strong> {tema_treinamento}<br>
-                    <strong>Objetivo:</strong> Capacitação comercial e operacional das lojas.
-                </div>
-                
-                <p>As inscrições já estão abertas e podem ser realizadas online através do formulário exclusivo do Google Forms que geramos para este evento. Por favor, preencha as informações do representante que irá comparecer.</p>
-                
-                <div class="button-wrapper">
-                    <a href="{link_formulario}" class="btn" target="_blank">Acessar Formulário de Inscrição</a>
-                </div>
-            </div>
-            <div class="footer">
-                Este e-mail é gerado automaticamente pelo Módulo de Automações do Shopping Flamboyant.<br>
-                Considere o meio ambiente antes de imprimir este e-mail.
-            </div>
-        </div>
-    </body>
-    </html>
-    """
+    html_content = _compor_html_convite(treinamento, link_formulario, nome_destinatario=nome_destinatario)
 
     gmail_scopes = ["https://www.googleapis.com/auth/gmail.send"]
     usuario_creds = _obter_credenciais_usuario(user_id, gmail_scopes)
@@ -221,9 +359,33 @@ def enviar_email_formulario(
             )
             return False
 
-    if user_id:
-        logger.warning("user_id informado, mas nao ha credenciais Gmail válidas para esse usuario.")
+    logger.warning("Fazendo fallback para SMTP para envio do e-mail de convite.")
+    return _enviar_via_smtp(destinatario, assunto, html_content)
+
+
+def enviar_email_validacao_presenca(
+    treinamento,
+    email_destinatario: str,
+    nome_destinatario: str = "",
+    user_id: str = None,
+) -> bool:
+    destinatario = email_destinatario or config.DEFAULT_DESTINATION_EMAIL
+    if not destinatario:
+        logger.warning("Nenhum e-mail de destino configurado para a validação de presença.")
         return False
 
-    logger.warning("Nenhum user_id informado; envio por Gmail do usuario nao disponivel.")
-    return False
+    assunto = f"Presença validada: { _valor_treinamento(treinamento, 'tema', 'Treinamento') }"
+    html_content = _compor_html_validacao_presenca(treinamento, nome_destinatario=nome_destinatario)
+
+    gmail_scopes = ["https://www.googleapis.com/auth/gmail.send"]
+    usuario_creds = _obter_credenciais_usuario(user_id, gmail_scopes)
+    if usuario_creds:
+        try:
+            return _enviar_via_gmail_api(usuario_creds, destinatario, assunto, html_content)
+        except HttpError as gmail_err:
+            logger.error(f"Falha no Gmail API do usuario: {gmail_err}")
+        except Exception as gmail_err:
+            logger.warning(f"Falha ao enviar validação via Gmail API do usuario ({gmail_err})")
+
+    logger.warning("Fazendo fallback para SMTP para envio do e-mail de presença validada.")
+    return _enviar_via_smtp(destinatario, assunto, html_content)

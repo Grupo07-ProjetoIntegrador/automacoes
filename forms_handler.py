@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+from datetime import datetime
 from typing import Optional
 import requests
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
@@ -13,6 +14,68 @@ from database import db_cursor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _valor_treinamento(treinamento, chave: str, default: str = "") -> str:
+    if treinamento is None:
+        return default
+
+    if isinstance(treinamento, dict):
+        valor = treinamento.get(chave, default)
+    else:
+        valor = getattr(treinamento, chave, default)
+
+    if valor is None:
+        return default
+
+    return str(valor).strip() or default
+
+
+def _formatar_data_pt(data_iso: str) -> str:
+    if not data_iso:
+        return ""
+
+    try:
+        data = datetime.strptime(data_iso, "%Y-%m-%d")
+    except ValueError:
+        return data_iso
+
+    meses = [
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+    ]
+    dias = [
+        "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
+        "sexta-feira", "sábado", "domingo",
+    ]
+    return f"{data.day} de {meses[data.month - 1]} ({dias[data.weekday()]})"
+
+
+def _montar_descricao_forms(treinamento) -> str:
+    descricao = _valor_treinamento(treinamento, "descricao")
+    objetivo = _valor_treinamento(treinamento, "objetivo")
+    data = _formatar_data_pt(_valor_treinamento(treinamento, "data"))
+    horario_inicio = _valor_treinamento(treinamento, "horario_inicio")
+    horario_fim = _valor_treinamento(treinamento, "horario_fim")
+    local = _valor_treinamento(treinamento, "local")
+    segmento = _valor_treinamento(treinamento, "segmento_alvo")
+
+    partes = []
+    if descricao:
+        partes.append(descricao)
+    if objetivo:
+        partes.append(f"Objetivo: {objetivo}")
+    if data or horario_inicio or horario_fim:
+        if horario_inicio and horario_fim:
+            partes.append(f"Data: {data}\nHorário: das {horario_inicio} às {horario_fim}")
+        else:
+            partes.append(f"Data: {data}")
+    if local:
+        partes.append(f"Local: {local}")
+    if segmento:
+        partes.append(f"Segmento-alvo: {segmento}")
+
+    return "\n\n".join(parte for parte in partes if parte).strip()
 
 def _obter_credenciais_google(scopes, user_id: str = None):
     """
@@ -233,11 +296,12 @@ def registrar_webhook_forms(treinamento_id: str, form_id: str) -> Optional[bool]
         logger.error(f"Erro ao chamar Apps Script Web App: {err}")
         return False
 
-def criar_google_form(treinamento_id: str, tema_treinamento: str, user_id: str = None) -> str:
+def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> str:
     """
     Cria ou recupera um formulário no Google Forms.
     Garante a exclusão de perguntas fantasmas e limita estritamente a 1 resposta por conta.
     """
+    tema_treinamento = _valor_treinamento(treinamento, "tema", "Treinamento")
     url_existente = verificar_forms_existente(treinamento_id)
     if url_existente:
         logger.info(f"🔄 [REUTILIZADO] Formulário já existia para o treinamento {treinamento_id}. Retornando URL salva.")
@@ -305,7 +369,7 @@ def criar_google_form(treinamento_id: str, tema_treinamento: str, user_id: str =
                 "updateFormInfo": {
                     "info": {
                         "title": f"Inscrição - Treinamento: {tema_treinamento}",
-                        "description": "Por favor, preencha os dados abaixo para confirmar sua presença no treinamento do Shopping Flamboyant."
+                        "description": _montar_descricao_forms(treinamento) or "Por favor, preencha os dados abaixo para confirmar sua presença no treinamento do Shopping Flamboyant."
                     },
                     "updateMask": "title,description"
                 }
