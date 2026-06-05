@@ -85,7 +85,7 @@ def _obter_credenciais_google(scopes, user_id: str = None):
     2) token.json (credenciais OAuth pessoais na pasta)
     3) Conta de serviço (credentials.json)
     
-    Adicionado: Renovação automática persistente (Auto-refresh) salvando de volta no Supabase.
+    Adicionado: Renovação automática permanente (Auto-refresh) salvando de volta no Supabase.
     """
     creds = None
 
@@ -286,64 +286,13 @@ def _extrair_owner_da_url(url_formulario: str) -> str:
 
 
 def registrar_webhook_forms(treinamento_id: str, form_id: str, user_id: str = None) -> Optional[bool]:
-    """Registra o gatilho do Apps Script para enviar respostas ao webhook publico."""
+    """
+    Registra o gatilho do Apps Script enviando uma chamada direta para o Web App estável.
+    Removida a requisição de atualização de infraestrutura/deploy via API do Google Script para evitar erros de 401.
+    """
     if not config.APPS_SCRIPT_WEBAPP_URL or not config.AUTOMACOES_PUBLIC_URL:
         logger.info("Apps Script Web App ou URL publica nao configurados; gatilho nao registrado.")
         return None
-
-    if getattr(config, "APPS_SCRIPT_PROJECT_ID", None):
-        try:
-            scopes = [
-                "https://www.googleapis.com/auth/script.deployments",
-                "https://www.googleapis.com/auth/script.projects"
-            ]
-            
-            master_user_id = os.getenv("GOOGLE_MASTER_USER_ID", user_id)
-            
-            logger.info(f"Obtendo credenciais master para atualizar o Apps Script. User ID Utilizado: {master_user_id}")
-            creds = _obter_credenciais_google(scopes, user_id=master_user_id)
-            
-            if creds:
-                script_service = build("script", "v1", credentials=creds)
-                
-                logger.info(f"Criando nova versão para o Apps Script {config.APPS_SCRIPT_PROJECT_ID}...")
-                version_body = {
-                    "description": f"Deploy Automático JP Mall - Treinamento ID: {treinamento_id}"
-                }
-                version_res = script_service.projects().versions().create(
-                    scriptId=config.APPS_SCRIPT_PROJECT_ID,
-                    body=version_body
-                ).execute()
-                version_number = version_res.get("versionNumber")
-                logger.info(f"Nova versão do script criada com sucesso: {version_number}")
-                
-                deployment_id = ""
-                parts = config.APPS_SCRIPT_WEBAPP_URL.split("/macros/s/")
-                if len(parts) > 1:
-                    deployment_id = parts[1].split("/")[0]
-                
-                if deployment_id:
-                    logger.info(f"Atualizando implantação (deploy) {deployment_id} para versão {version_number}...")
-                    deploy_body = {
-                        "deploymentConfig": {
-                            "scriptId": config.APPS_SCRIPT_PROJECT_ID,
-                            "versionNumber": version_number,
-                            "manifestFileName": "appsscript",
-                            "description": "Web App Público JP Mall"
-                        }
-                    }
-                    script_service.projects().deployments().update(
-                        scriptId=config.APPS_SCRIPT_PROJECT_ID,
-                        deploymentId=deployment_id,
-                        body=deploy_body
-                    ).execute()
-                    logger.info("Deploy do Apps Script updated com sucesso via API.")
-                else:
-                    logger.warning("Não foi possível extrair o deploymentId da APPS_SCRIPT_WEBAPP_URL.")
-            else:
-                logger.warning("Credenciais de deploy Master não encontradas ou inválidas no banco.")
-        except Exception as script_err:
-            logger.error(f"Erro ao atualizar deploy do Apps Script via API: {script_err}")
 
     webhook_url = f"{_normalizar_url_base(config.AUTOMACOES_PUBLIC_URL)}/api/automacoes/webhook-inscricao"
     payload = {
@@ -351,13 +300,16 @@ def registrar_webhook_forms(treinamento_id: str, form_id: str, user_id: str = No
         "form_id": form_id,
         "webhook_url": webhook_url
     }
+    
     if config.APPS_SCRIPT_TOKEN:
         payload["token"] = config.APPS_SCRIPT_TOKEN
+        
     headers = {"Content-Type": "application/json"}
     if config.APPS_SCRIPT_TOKEN:
         headers["X-Automacoes-Token"] = config.APPS_SCRIPT_TOKEN
 
     try:
+        logger.info(f"Disparando requisição de vinculação de Gatilho para o Apps Script Web App estável...")
         response = requests.post(config.APPS_SCRIPT_WEBAPP_URL, json=payload, headers=headers, timeout=30)
         if response.status_code in [200, 201]:
             logger.info("Gatilho do Apps Script registrado com sucesso.")
