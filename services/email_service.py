@@ -23,7 +23,6 @@ def _obter_logo_base64_local() -> str:
     Busca o arquivo de imagem local e converte para Base64.
     Se o arquivo não existir, retorna um fallback ou string vazia para não quebrar o sistema.
     """
-    # Nome do arquivo da logo que deve estar na mesma pasta do script (ou ajuste o caminho)
     caminho_logo = os.path.join(os.path.dirname(__file__), "flamboyant-logo.png")
     
     if os.path.exists(caminho_logo):
@@ -90,8 +89,6 @@ def _compor_html_convite(treinamento, link_formulario: str, nome_destinatario: s
     periodo = _formatar_periodo(treinamento)
 
     saudacao = f"Olá, {nome_destinatario}," if nome_destinatario else "Olá, Parceiro Lojista,"
-    
-    # Carrega a logo dinamicamente do sistema de arquivos
     logo_src = _obter_logo_base64_local()
 
     linhas_detalhes = []
@@ -157,7 +154,7 @@ def _compor_html_convite(treinamento, link_formulario: str, nome_destinatario: s
             <div style="font-size: 16px; font-weight: 700; color: #8B1A1A; letter-spacing: 1px; margin-bottom: 6px;">GRUPO FLAMBOYANT</div>
             <div style="font-size: 12px; font-style: italic; color: #C8A882; margin-bottom: 15px;">Elevar para evoluir, envolver para encantar.</div>
             <div style="font-size: 11px; color: #9CA3AF; line-height: 1.4;">
-                Este é um comunicado oficial automatizado enviado pela Administração do JP Mall Corporativo.<br>
+                Este é um comunicado oficial automatizado enviado pela Administration do JP Mall Corporativo.<br>
                 © {datetime.now().year} Grupo Flamboyant — Todos os direitos reservados.
             </div>
         </div>
@@ -172,7 +169,6 @@ def _compor_html_validacao_presenca(treinamento, nome_destinatario: str = "") ->
     periodo = _formatar_periodo(treinamento)
     saudacao = f"Olá, {nome_destinatario}," if nome_destinatario else "Olá,"
 
-    # Carrega a logo dinamicamente do sistema de arquivos
     logo_src = _obter_logo_base64_local()
 
     linhas_evento = []
@@ -187,7 +183,7 @@ def _compor_html_validacao_presenca(treinamento, nome_destinatario: str = "") ->
 <html lang="pt-BR">
 <head>
     <meta charset="utf-8">
-    <title>Presença Confirmada - JP Mall Corporativo</title>
+    <title>Presença Confimada - JP Mall Corporativo</title>
 </head>
 <body style="font-family: 'Inter', 'Roboto', system-ui, sans-serif; background-color: #F7F4EF; margin: 0; padding: 40px 20px; color: #1F2937; -webkit-print-color-adjust: exact;">
     <div style="max-width: 650px; margin: 0 auto; background-color: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);">
@@ -309,9 +305,8 @@ def _obter_credenciais_usuario(user_id: str, scopes: list[str]):
         return None
 
 
-def _enviar_via_gmail_api(creds, destinatario: str, assunto: str, html_content: str) -> bool:
-    gmail_service = build("gmail", "v1", credentials=creds)
-
+def _enviar_via_gmail_api(gmail_service, destinatario: str, assunto: str, html_content: str) -> bool:
+    """Modificado para aceitar o 'gmail_service' já instanciado de fora e evitar builds repetitivos"""
     logger.info(f"Enviando e-mail via Gmail API para {destinatario}")
 
     message = MIMEMultipart("alternative")
@@ -334,6 +329,7 @@ def enviar_email_formulario(
     email_destinatario: str = None,
     user_id: str = None,
     nome_destinatario: str = "",
+    usuario_creds=None,  # AJUSTE DA MUDANÇA 3: Injetável de fora
 ) -> bool:
     destinatario = email_destinatario or config.DEFAULT_DESTINATION_EMAIL
     
@@ -345,19 +341,23 @@ def enviar_email_formulario(
     assunto = f"Inscrições Abertas: Treinamento - {tema_treinamento}"
     html_content = _compor_html_convite(treinamento, link_formulario, nome_destinatario=nome_destinatario)
 
-    gmail_scopes = ["https://www.googleapis.com/auth/gmail.send"]
-    usuario_creds = _obter_credenciais_usuario(user_id, gmail_scopes)
+    # Se as credenciais não forem injetadas, executa o fluxo padrão de busca no banco
+    if not usuario_creds:
+        if not user_id:
+            user_id = os.getenv("GOOGLE_MASTER_USER_ID")
+
+        gmail_scopes = ["https://www.googleapis.com/auth/gmail.send"]
+        usuario_creds = _obter_credenciais_usuario(user_id, gmail_scopes)
+
     if usuario_creds:
         try:
-            return _enviar_via_gmail_api(usuario_creds, destinatario, assunto, html_content)
+            # Constrói o serviço apenas uma vez por chamada de envio
+            gmail_service = build("gmail", "v1", credentials=usuario_creds)
+            return _enviar_via_gmail_api(gmail_service, destinatario, assunto, html_content)
         except HttpError as gmail_err:
             logger.error(f"Falha no Gmail API do usuario: {gmail_err}")
-            return False
         except Exception as gmail_err:
-            logger.warning(
-                f"Falha ao enviar e-mail via Gmail API do usuario ({gmail_err})"
-            )
-            return False
+            logger.warning(f"Falha ao enviar e-mail via Gmail API do usuario ({gmail_err})")
 
     logger.warning("Fazendo fallback para SMTP para envio do e-mail de convite.")
     return _enviar_via_smtp(destinatario, assunto, html_content)
@@ -368,6 +368,7 @@ def enviar_email_validacao_presenca(
     email_destinatario: str,
     nome_destinatario: str = "",
     user_id: str = None,
+    usuario_creds=None,  # AJUSTE DA MUDANÇA 3: Injetável de fora
 ) -> bool:
     destinatario = email_destinatario or config.DEFAULT_DESTINATION_EMAIL
     if not destinatario:
@@ -377,15 +378,24 @@ def enviar_email_validacao_presenca(
     assunto = f"Presença validada: { _valor_treinamento(treinamento, 'tema', 'Treinamento') }"
     html_content = _compor_html_validacao_presenca(treinamento, nome_destinatario=nome_destinatario)
 
-    gmail_scopes = ["https://www.googleapis.com/auth/gmail.send"]
-    usuario_creds = _obter_credenciais_usuario(user_id, gmail_scopes)
+    # Se as credenciais não forem injetadas, executa o fluxo padrão de busca no banco
+    if not usuario_creds:
+        if not user_id:
+            user_id = os.getenv("GOOGLE_MASTER_USER_ID")
+            logger.info(f"Nenhum user_id fornecido para o check-in. Utilizando fallback da Conta Master ID: {user_id}")
+
+        gmail_scopes = ["https://www.googleapis.com/auth/gmail.send"]
+        usuario_creds = _obter_credenciais_usuario(user_id, gmail_scopes)
+
     if usuario_creds:
         try:
-            return _enviar_via_gmail_api(usuario_creds, destinatario, assunto, html_content)
+            # Constrói o serviço apenas uma vez por chamada de envio
+            gmail_service = build("gmail", "v1", credentials=usuario_creds)
+            return _enviar_via_gmail_api(gmail_service, destinatario, assunto, html_content)
         except HttpError as gmail_err:
-            logger.error(f"Falha no Gmail API do usuario: {gmail_err}")
+            logger.error(f"Falha de API do Gmail ao enviar confirmação de presença: {gmail_err.content.decode('utf-8')}")
         except Exception as gmail_err:
-            logger.warning(f"Falha ao enviar validação via Gmail API do usuario ({gmail_err})")
+            logger.warning(f"Falha crítica ao enviar validação via Gmail API ({gmail_err})")
 
     logger.warning("Fazendo fallback para SMTP para envio do e-mail de presença validada.")
     return _enviar_via_smtp(destinatario, assunto, html_content)

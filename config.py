@@ -18,6 +18,7 @@ AUTOMACOES_PUBLIC_URL = os.getenv("AUTOMACOES_PUBLIC_URL", "")
 # Apps Script Web App para registrar gatilhos automaticos por formulario
 APPS_SCRIPT_WEBAPP_URL = os.getenv("APPS_SCRIPT_WEBAPP_URL", "")
 APPS_SCRIPT_TOKEN = os.getenv("APPS_SCRIPT_TOKEN", "")
+APPS_SCRIPT_PROJECT_ID = os.getenv("APPS_SCRIPT_PROJECT_ID", "")
 
 # Configurações de Google APIs
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")

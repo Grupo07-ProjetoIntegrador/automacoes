@@ -19,3 +19,6 @@ logs/
 
 # Byte-compiled / optimized / DLL files
 *.so
+
+credentials_OFF.json
+client_secrets.json

@@ -61,6 +61,7 @@ class ValidacaoPresencaRequest(BaseModel):
     destinatario: ConviteDestinatarioRequest
     user_id: str = None
 
+
 class WebhookInscricaoRequest(BaseModel):
     treinamento_id: str
     nome_representante: str
@@ -69,6 +70,7 @@ class WebhookInscricaoRequest(BaseModel):
     cargo: str
     nome_loja: str
     luc: str = ""
+
 
 class ApagarFormsRequest(BaseModel):
     treinamento_id: str
@@ -86,6 +88,7 @@ def health_check():
         "environment": "production" if os.path.exists(config.GOOGLE_SERVICE_ACCOUNT_FILE) else "simulation"
     }
 
+
 @app.get("/checkin", response_class=HTMLResponse)
 def checkin_page(treinamento_id: str = Query(..., description="ID do treinamento correspondente")):
     """Retorna a interface do checkin.html para o celular do lojista."""
@@ -97,6 +100,7 @@ def checkin_page(treinamento_id: str = Query(..., description="ID do treinamento
         html_content = f.read()
     
     return html_content
+
 
 def background_gerar_e_enviar(req: GerarFormsRequest):
     """Tarefa em background para gerar o Forms e disparar e-mail sem travar a requisição HTTP."""
@@ -118,19 +122,18 @@ def background_gerar_e_enviar(req: GerarFormsRequest):
     except Exception as e:
         logger.error(f"Erro na tarefa em background de geração de forms: {e}")
 
+
 @app.post("/api/automacoes/gerar-forms")
 def endpoint_gerar_forms(req: GerarFormsRequest, background_tasks: BackgroundTasks):
     """
     Acionado pelo backend em Go quando um novo treinamento é cadastrado.
     Inicia em background a geração do Forms e o envio do e-mail.
     """
-    # Valida se o treinamento existe no banco de dados antes
     with db_cursor() as cursor:
         cursor.execute("SELECT id FROM treinamentos WHERE id = %s;", (req.treinamento_id,))
         if not cursor.fetchone():
             raise HTTPException(status_code=404, detail="Treinamento informado não existe no banco de dados.")
 
-    # Agenda a tarefa para rodar assincronamente e responde imediatamente ao Go
     background_tasks.add_task(background_gerar_e_enviar, req)
     
     return {
@@ -145,7 +148,6 @@ def background_disparar_convites(req: DisparoConviteRequest):
 
         if req.modo == "segmento_treinamento" and req.segmento_treinamento:
             target = (req.segmento_treinamento or "").strip().lower()
-            # Se o segmento do treinamento for 'geral', entende-se como atingir todos
             if target == "geral":
                 destinatarios = req.destinatarios
             else:
@@ -157,7 +159,6 @@ def background_disparar_convites(req: DisparoConviteRequest):
         elif req.modo == "segmento_loja" and req.segmento_loja:
             seg_loja = (req.segmento_loja or "").strip().lower()
             if seg_loja == "lojas":
-                # 'Lojas' = todas exceto Alimentação e Academia
                 destinatarios = [
                     destinatario
                     for destinatario in req.destinatarios
@@ -213,31 +214,48 @@ def endpoint_disparar_convite(req: DisparoConviteRequest, background_tasks: Back
 
 
 def background_notificar_presenca_validada(req: ValidacaoPresencaRequest):
+    """Tarefa em segundo plano para buscar credenciais Master da API do Gmail e enviar e-mail."""
     try:
+        # 1. Carrega as credenciais da Conta Master antes do disparo utilizando os escopos cheios
+        master_id = req.user_id or os.getenv("GOOGLE_MASTER_USER_ID")
+        gmail_scopes = [
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/forms",
+            "https://www.googleapis.com/auth/forms.body",
+            "https://www.googleapis.com/auth/gmail.send"
+        ]
+        
+        try:
+            from services.email_service import _obter_credenciais_usuario
+            creds_master = _obter_credenciais_usuario(master_id, gmail_scopes)
+        except Exception as db_err:
+            logger.warning(f"Falha de conexão temporária ao banco Supabase ao obter token master: {db_err}")
+            creds_master = None
+
+        # 2. Executa o envio repassando as credenciais injetadas (Evita falhas de concorrência ou fallback SMTP indesejado)
         enviou = enviar_email_validacao_presenca(
-            req.treinamento,
-            req.destinatario.email,
+            treinamento=req.treinamento,
+            email_destinatario=req.destinatario.email,
             nome_destinatario=req.destinatario.nome,
-            user_id=req.user_id,
+            user_id=master_id,
+            usuario_creds=creds_master
         )
+
         if enviou:
-            logger.info(
-                "E-mail de presença validada enviado para %s no treinamento %s",
-                req.destinatario.email,
-                req.treinamento_id,
-            )
+            logger.info(f"E-mail de presença validada enviado com SUCESSO via Gmail API para {req.destinatario.email}")
         else:
-            logger.warning(
-                "Não foi possível enviar o e-mail de presença validada para %s no treinamento %s",
-                req.destinatario.email,
-                req.treinamento_id,
-            )
+            logger.warning(f"Não foi possível processar o envio via Gmail API para {req.destinatario.email}.")
+            
     except Exception as e:
-        logger.error(f"Erro ao notificar presença validada: {e}")
+        logger.error(f"Erro crítico no fluxo em background de notificação de presença: {e}")
 
 
 @app.post("/api/automacoes/notificar-presenca-validada")
-def endpoint_notificar_presenca_validada(req: ValidacaoPresencaRequest, background_tasks: BackgroundTasks):
+def notificar_presenca_validada(req: ValidacaoPresencaRequest, background_tasks: BackgroundTasks):
+    """
+    Acionado após o check-in do lojista. 
+    Agenda o envio em background para retornar o HTTP 200 OK imediatamente.
+    """
     with db_cursor() as cursor:
         cursor.execute("SELECT id FROM treinamentos WHERE id = %s;", (req.treinamento_id,))
         if not cursor.fetchone():
@@ -247,8 +265,9 @@ def endpoint_notificar_presenca_validada(req: ValidacaoPresencaRequest, backgrou
 
     return {
         "status": "processing",
-        "message": "O e-mail de presença validada foi iniciado em segundo plano.",
+        "message": f"A notificação de confirmação para '{req.destinatario.email}' foi agendada via Gmail API."
     }
+
 
 @app.post("/api/automacoes/apagar-form")
 def endpoint_apagar_form(req: ApagarFormsRequest):
@@ -268,25 +287,23 @@ def endpoint_apagar_form(req: ApagarFormsRequest):
         "drive_deleted": result.get("drive_deleted", False)
     }
 
+
 @app.post("/api/automacoes/webhook-inscricao")
 def endpoint_webhook_inscricao(req: WebhookInscricaoRequest, request: Request):
     """
     Recebe as respostas do Google Forms via Apps Script.
     Valida se o treinamento existe e repassa em formato estruturado para o backend Go persistir.
     """
-    # 0. Valida token opcional
     if config.APPS_SCRIPT_TOKEN:
         token = request.headers.get("X-Automacoes-Token", "")
         if token != config.APPS_SCRIPT_TOKEN:
             raise HTTPException(status_code=401, detail="Token do webhook invalido.")
 
-    # 1. Valida se o treinamento existe
     with db_cursor() as cursor:
         cursor.execute("SELECT id FROM treinamentos WHERE id = %s;", (req.treinamento_id,))
         if not cursor.fetchone():
             raise HTTPException(status_code=404, detail=f"O treinamento ID '{req.treinamento_id}' não existe no banco de dados.")
 
-    # 2. Repassa os dados para o backend em Go processar a criação silenciosa de lojas e a matrícula
     url_go = f"{config.BACKEND_URL}/api/treinamentos/webhook-forms"
     
     payload = {

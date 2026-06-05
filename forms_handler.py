@@ -77,12 +77,15 @@ def _montar_descricao_forms(treinamento) -> str:
 
     return "\n\n".join(parte for parte in partes if parte).strip()
 
+
 def _obter_credenciais_google(scopes, user_id: str = None):
     """
     Tenta obter credenciais nesta ordem:
     1) tokens do usuário salvos na tabela `google_oauth_tokens` (se `user_id` fornecido)
-    2) `token.json` (credenciais OAuth pessoais na pasta)
+    2) token.json (credenciais OAuth pessoais na pasta)
     3) Conta de serviço (credentials.json)
+    
+    Adicionado: Renovação automática persistente (Auto-refresh) salvando de volta no Supabase.
     """
     creds = None
 
@@ -95,6 +98,7 @@ def _obter_credenciais_google(scopes, user_id: str = None):
                     (user_id,)
                 )
                 row = cursor.fetchone()
+                
                 if row:
                     access_token, refresh_token, token_type, scope, expires_at = row
                     creds = OAuth2Credentials(
@@ -105,41 +109,48 @@ def _obter_credenciais_google(scopes, user_id: str = None):
                         client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
                         scopes=scopes,
                     )
-                    # Refresh if expired and refresh_token available
-                    try:
-                        if hasattr(creds, 'expired') and creds.expired and creds.refresh_token:
-                            logger.info('Atualizando token do usuário via refresh_token...')
+                    
+                    # Verifica se o token expirou (ou está prestes a expirar) e faz o Auto-Refresh
+                    if hasattr(creds, 'expired') and creds.expired and creds.refresh_token:
+                        try:
+                            logger.info(f"🔄 Token do usuário {user_id} expirado no Supabase. Executando renovação via Refresh Token...")
                             creds.refresh(GoogleRequest())
-                            # Optionally update database with new access token and expiry
+                            
+                            # Formata a nova expiração gerada pelo Google para salvar corretamente no PostgreSQL
+                            nova_expiracao = creds.expiry.strftime('%Y-%m-%d %H:%M:%S') if creds.expiry else None
+                            
+                            # PERSISTÊNCIA: Atualiza imediatamente o Supabase com o novo access_token válido por mais 1 hora
                             with db_cursor() as update_cursor:
                                 update_cursor.execute(
                                     "UPDATE google_oauth_tokens SET access_token = %s, expires_at = %s WHERE user_id = %s;",
-                                    (creds.token, creds.expiry, user_id)
+                                    (creds.token, nova_expiracao, user_id)
                                 )
-                    except Exception as refresh_err:
-                        logger.warning(f'Falha ao atualizar token do usuário: {refresh_err}')
-                    logger.info('Utilizando credenciais do usuário obtidas do banco.')
+                            logger.info(f"✅ Novo access_token do usuário {user_id} persistido com sucesso no Supabase!")
+                        except Exception as refresh_err:
+                            logger.warning(f"Falha ao renovar token do usuário {user_id} em background: {refresh_err}")
+                    
+                    logger.info(f"Utilizando credenciais do usuário {user_id} obtidas do banco.")
                     return creds
         except Exception as db_err:
-            logger.warning(f'Erro ao buscar tokens do usuário no banco: {db_err}')
+            logger.warning(f"Erro ao buscar ou atualizar tokens do usuário no banco: {db_err}")
 
-    # 2) token.json local (fallback)
+    # 2) token.json local (fallback para ambiente de desenvolvimento local)
     token_path = "token.json"
     if os.path.exists(token_path):
         try:
             creds = OAuth2Credentials.from_authorized_user_file(token_path, scopes)
             if creds and getattr(creds, 'expired', False) and getattr(creds, 'refresh_token', None):
-                logger.info("Atualizando token OAuth2 expirado...")
+                logger.info("Atualizando token OAuth2 local (token.json) expirado...")
                 creds.refresh(GoogleRequest())
                 with open(token_path, "w") as token_file:
                     token_file.write(creds.to_json())
-            logger.info("Utilizando credenciais OAuth 2.0 pessoais (token.json).")
+            logger.info("Utilizando credenciais OAuth 2.0 pessoais locais (token.json).")
             return creds
         except Exception as oauth_err:
             logger.error(f"Erro ao carregar ou atualizar o token.json: {oauth_err}")
             creds = None
 
-    # 3) Conta de serviço
+    # 3) Conta de serviço (Fallback institucional padrão)
     if not creds and os.path.exists(config.GOOGLE_SERVICE_ACCOUNT_FILE):
         logger.info("Utilizando credenciais da Conta de Serviço (credentials.json).")
         creds = service_account.Credentials.from_service_account_file(
@@ -148,6 +159,7 @@ def _obter_credenciais_google(scopes, user_id: str = None):
         )
 
     return creds
+
 
 def apagar_formulario(treinamento_id: str, user_id: str = None) -> dict:
     """Remove o vinculo no banco e tenta apagar o formulario no Drive."""
@@ -194,6 +206,7 @@ def apagar_formulario(treinamento_id: str, user_id: str = None) -> dict:
                 drive_deleted = True
                 logger.info(f"Formulario {form_id} removido do Drive.")
             except Exception as drive_err:
+                drive_service = None
                 logger.warning(f"Falha ao remover formulario no Drive: {drive_err}")
         else:
             logger.warning("Credenciais Google nao encontradas para apagar o formulario.")
@@ -206,6 +219,7 @@ def apagar_formulario(treinamento_id: str, user_id: str = None) -> dict:
         "url_formulario": url_formulario.split("#", 1)[0],
     }
 
+
 def obter_lojas_ativas():
     """Busca os nomes de todas as lojas ativas no banco de dados para popular o formulário."""
     try:
@@ -216,6 +230,7 @@ def obter_lojas_ativas():
     except Exception as e:
         logger.error(f"Erro ao buscar lojas para o Forms: {e}")
         return []
+
 
 def verificar_forms_existente(treinamento_id: str) -> str:
     """Verifica na tabela se já existe um formulário atrelado a este treinamento."""
@@ -229,6 +244,7 @@ def verificar_forms_existente(treinamento_id: str) -> str:
         logger.warning(f"Aviso ao verificar formulário existente no banco: {e}")
     return None
 
+
 def salvar_forms_no_banco(treinamento_id: str, form_id: str, url_formulario: str, user_id: str = None):
     """Registra o vínculo do novo formulário com o treinamento na tabela do Supabase."""
     try:
@@ -241,6 +257,7 @@ def salvar_forms_no_banco(treinamento_id: str, form_id: str, url_formulario: str
             """, (treinamento_id, form_id, url_armazenada))
     except Exception as e:
         logger.error(f"Erro ao salvar o formulário no banco de dados: {e}")
+
 
 def _normalizar_url_base(url: str) -> str:
     return url.rstrip("/") if url else ""
@@ -267,11 +284,66 @@ def _extrair_owner_da_url(url_formulario: str) -> str:
     owner_values = fragment_data.get("owner_user_id", [])
     return owner_values[0] if owner_values else ""
 
-def registrar_webhook_forms(treinamento_id: str, form_id: str) -> Optional[bool]:
+
+def registrar_webhook_forms(treinamento_id: str, form_id: str, user_id: str = None) -> Optional[bool]:
     """Registra o gatilho do Apps Script para enviar respostas ao webhook publico."""
     if not config.APPS_SCRIPT_WEBAPP_URL or not config.AUTOMACOES_PUBLIC_URL:
         logger.info("Apps Script Web App ou URL publica nao configurados; gatilho nao registrado.")
         return None
+
+    if getattr(config, "APPS_SCRIPT_PROJECT_ID", None):
+        try:
+            scopes = [
+                "https://www.googleapis.com/auth/script.deployments",
+                "https://www.googleapis.com/auth/script.projects"
+            ]
+            
+            master_user_id = os.getenv("GOOGLE_MASTER_USER_ID", user_id)
+            
+            logger.info(f"Obtendo credenciais master para atualizar o Apps Script. User ID Utilizado: {master_user_id}")
+            creds = _obter_credenciais_google(scopes, user_id=master_user_id)
+            
+            if creds:
+                script_service = build("script", "v1", credentials=creds)
+                
+                logger.info(f"Criando nova versão para o Apps Script {config.APPS_SCRIPT_PROJECT_ID}...")
+                version_body = {
+                    "description": f"Deploy Automático JP Mall - Treinamento ID: {treinamento_id}"
+                }
+                version_res = script_service.projects().versions().create(
+                    scriptId=config.APPS_SCRIPT_PROJECT_ID,
+                    body=version_body
+                ).execute()
+                version_number = version_res.get("versionNumber")
+                logger.info(f"Nova versão do script criada com sucesso: {version_number}")
+                
+                deployment_id = ""
+                parts = config.APPS_SCRIPT_WEBAPP_URL.split("/macros/s/")
+                if len(parts) > 1:
+                    deployment_id = parts[1].split("/")[0]
+                
+                if deployment_id:
+                    logger.info(f"Atualizando implantação (deploy) {deployment_id} para versão {version_number}...")
+                    deploy_body = {
+                        "deploymentConfig": {
+                            "scriptId": config.APPS_SCRIPT_PROJECT_ID,
+                            "versionNumber": version_number,
+                            "manifestFileName": "appsscript",
+                            "description": "Web App Público JP Mall"
+                        }
+                    }
+                    script_service.projects().deployments().update(
+                        scriptId=config.APPS_SCRIPT_PROJECT_ID,
+                        deploymentId=deployment_id,
+                        body=deploy_body
+                    ).execute()
+                    logger.info("Deploy do Apps Script updated com sucesso via API.")
+                else:
+                    logger.warning("Não foi possível extrair o deploymentId da APPS_SCRIPT_WEBAPP_URL.")
+            else:
+                logger.warning("Credenciais de deploy Master não encontradas ou inválidas no banco.")
+        except Exception as script_err:
+            logger.error(f"Erro ao atualizar deploy do Apps Script via API: {script_err}")
 
     webhook_url = f"{_normalizar_url_base(config.AUTOMACOES_PUBLIC_URL)}/api/automacoes/webhook-inscricao"
     payload = {
@@ -286,7 +358,7 @@ def registrar_webhook_forms(treinamento_id: str, form_id: str) -> Optional[bool]
         headers["X-Automacoes-Token"] = config.APPS_SCRIPT_TOKEN
 
     try:
-        response = requests.post(config.APPS_SCRIPT_WEBAPP_URL, json=payload, headers=headers, timeout=10)
+        response = requests.post(config.APPS_SCRIPT_WEBAPP_URL, json=payload, headers=headers, timeout=30)
         if response.status_code in [200, 201]:
             logger.info("Gatilho do Apps Script registrado com sucesso.")
             return True
@@ -295,6 +367,7 @@ def registrar_webhook_forms(treinamento_id: str, form_id: str) -> Optional[bool]
     except requests.exceptions.RequestException as err:
         logger.error(f"Erro ao chamar Apps Script Web App: {err}")
         return False
+
 
 def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> str:
     """
@@ -310,12 +383,11 @@ def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> 
     form_id = None
     responder_uri = f"https://docs.google.com/forms/d/e/mock_form_fallback_{treinamento_id}/viewform"
 
-    creds = None
     scopes = [
         "https://www.googleapis.com/auth/forms.body",
         "https://www.googleapis.com/auth/drive"
     ]
-    # Tenta obter credenciais do usuário (se informado), token.json ou conta de serviço
+    
     creds = _obter_credenciais_google(scopes, user_id=user_id)
     if not creds:
         mock_uri = f"https://docs.google.com/forms/d/e/mock_form_{treinamento_id}/viewform"
@@ -325,7 +397,6 @@ def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> 
         form_service = build('forms', 'v1', credentials=creds)
         drive_service = build('drive', 'v3', credentials=creds)
 
-        # 1. Cria o formulário em branco no Drive
         drive_file_meta = {
             "name": f"Inscrição - Treinamento: {tema_treinamento}",
             "mimeType": "application/vnd.google-apps.form"
@@ -340,30 +411,32 @@ def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> 
 
         logger.info(f"Formulário criado via Drive API com sucesso. ID: {form_id}")
 
-        # 2. Descobre o ID do item fantasma padrão que o Google cria sozinho para podermos deletá-lo
         form_atual = form_service.forms().get(formId=form_id).execute()
         itens_iniciais = form_atual.get("items", [])
         
         requests_lista = []
         
-        # Se o Google criou um item padrão, adiciona o comando para apagá-lo
         if itens_iniciais:
-            item_fantasma_id = itens_iniciais[0].get("itemId")
             requests_lista.append({
                 "deleteItem": {
                     "location": {"index": 0}
                 }
             })
 
-        # Prepara a lista de lojas
-        lojas = obter_lojas_ativas()
-        if not lojas:
-            lojas = ["Livraria Leitura", "Cacau Show", "Zara"]
+        lojas_raw = obter_lojas_ativas()
+        if not lojas_raw:
+            lojas_raw = ["Livraria Leitura", "Cacau Show", "Zara"]
+        seen = set()
+        lojas = []
+        for nome in lojas_raw:
+            chave = nome.strip().upper()
+            if chave not in seen:
+                seen.add(chave)
+                lojas.append(nome)
 
         opcoes_lojas = [{"value": loja} for loja in lojas]
         opcoes_lojas.append({"value": "Outra Loja (Não listada)"})
 
-        # 3. Monta a requisição estruturada das perguntas legítimas
         requests_lista.extend([
             {
                 "updateFormInfo": {
@@ -373,11 +446,16 @@ def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> 
                     },
                     "updateMask": "title,description"
                 }
-            },
-            {
+            }
+        ])
+        
+        # Adiciona os campos de perguntas estritamente no formato batch
+        perguntas = ["Nome do Representante", "E-mail", "Telefone"]
+        for idx, titulo_pergunta in enumerate(perguntas):
+            item_data = {
                 "createItem": {
                     "item": {
-                        "title": "Nome do Representante",
+                        "title": titulo_pergunta,
                         "questionItem": {
                             "question": {
                                 "required": True,
@@ -385,38 +463,14 @@ def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> 
                             }
                         }
                     },
-                    "location": {"index": 0}
+                    "location": {"index": idx}
                 }
-            },
-            {
-                "createItem": {
-                    "item": {
-                        "title": "E-mail",
-                        "questionItem": {
-                            "question": {
-                                "required": True,
-                                "textQuestion": {}
-                            }
-                        }
-                    },
-                    "location": {"index": 1}
-                }
-            },
-            {
-                "createItem": {
-                    "item": {
-                        "title": "Telefone",
-                        "description": "Exemplo: (62) 99999-9999",
-                        "questionItem": {
-                            "question": {
-                                "required": True,
-                                "textQuestion": {}
-                            }
-                        }
-                    },
-                    "location": {"index": 2}
-                }
-            },
+            }
+            if titulo_pergunta == "Telefone":
+                item_data["createItem"]["item"]["description"] = "Exemplo: (62) 99999-9999"
+            requests_lista.append(item_data)
+
+        requests_lista.extend([
             {
                 "createItem": {
                     "item": {
@@ -460,16 +514,13 @@ def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> 
             }
         ])
 
-        # Executa a limpeza e criação tudo de uma vez só
         update_requests = {"requests": requests_lista}
         form_service.forms().batchUpdate(formId=form_id, body=update_requests).execute()
         logger.info("Formulário limpo e perguntas estruturadas adicionadas com sucesso.")
 
-        # Recarrega metadados para pegar a URL pública correta
         form_metadata = form_service.forms().get(formId=form_id).execute()
         responder_uri = form_metadata.get("responderUri", responder_uri)
 
-        # 4. 🔒 TRAVA ANTI-FRAUDE DEFINITIVA: Exige login e limita a exatamente 1 resposta
         try:
             form_service.forms().setPublishSettings(
                 formId=form_id,
@@ -483,7 +534,6 @@ def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> 
                 }
             ).execute()
             
-            # Atualiza o formulário para exigir apenas 1 resposta travando por e-mail do respondente
             form_service.forms().batchUpdate(
                 formId=form_id,
                 body={
@@ -500,13 +550,10 @@ def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> 
                 }
             ).execute()
             
-            # NOTA: O limite de 1 resposta por conta no Google Forms exige que a opção correspondente 
-            # de coletar e-mails verificados esteja ativa no painel ou configurada nas políticas.
             logger.info("Formulário configurado com travas anti-fraude ativas.")
         except Exception as pub_api_err:
             logger.warning(f"Aviso ao aplicar configurações de publicação: {pub_api_err}")
 
-        # Compartilhamento administrativo padrão
         if form_id:
             time.sleep(1)
             if config.DEFAULT_DESTINATION_EMAIL:
@@ -514,7 +561,10 @@ def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> 
                     permission_body = {'type': 'user', 'role': 'writer', 'emailAddress': config.DEFAULT_DESTINATION_EMAIL}
                     drive_service.permissions().create(fileId=form_id, body=permission_body, transferOwnership=False).execute()
                 except Exception as share_err:
-                    logger.warning(f"Aviso de compartilhamento: {share_err}")
+                    if "server closed the connection unexpectedly" in str(share_err):
+                         logger.warning("Banco de dados fechou a conexao, ignorando erro menor de permissao.")
+                    else:
+                         logger.warning(f"Aviso de compartilhamento: {share_err}")
 
             try:
                 public_permission = {'type': 'anyone', 'role': 'reader'}
@@ -523,9 +573,8 @@ def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> 
                 logger.warning(f"Aviso de permissão pública: {public_err}")
 
         if form_id:
-            registrar_webhook_forms(treinamento_id, form_id)
+            registrar_webhook_forms(treinamento_id, form_id, user_id=user_id)
 
-        # Salva o resultado final no banco de dados para evitar duplicações futuras
         salvar_forms_no_banco(treinamento_id, form_id, responder_uri, user_id=user_id)
 
     except Exception as err:
