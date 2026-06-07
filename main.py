@@ -3,14 +3,16 @@ import logging
 from pathlib import Path
 import requests
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
+import io
 
 import config
 from database import db_cursor, test_connection
 from forms_handler import criar_google_form, apagar_formulario
 from services.email_service import enviar_email_formulario, enviar_email_validacao_presenca
+from services.gerar_pdf import gerar_pdf_dossie_loja, gerar_pdf_ata_chamada
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -75,6 +77,19 @@ class WebhookInscricaoRequest(BaseModel):
 class ApagarFormsRequest(BaseModel):
     treinamento_id: str
     user_id: str = None
+
+
+class PDFDossieLojaRequest(BaseModel):
+    dados_loja: dict
+    period: dict
+    historico_treinamentos: list
+
+
+class PDFAtaChamadaRequest(BaseModel):
+    dados_treinamento: dict
+    presentes: list
+    ausentes: list
+
 
 # ==================== ROTAS DA API ====================
 
@@ -339,3 +354,31 @@ def endpoint_webhook_inscricao(req: WebhookInscricaoRequest, request: Request):
             status_code=503, 
             detail="O serviço de persistência em Go está temporariamente indisponível. Tente novamente mais tarde."
         )
+
+
+@app.post("/api/automacoes/pdf/dossie")
+def endpoint_pdf_dossie(req: PDFDossieLojaRequest):
+    try:
+        pdf_bytes = gerar_pdf_dossie_loja(req.dados_loja, req.period, req.historico_treinamentos)
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=dossie_{req.dados_loja.get('luc', 'loja')}.pdf"}
+        )
+    except Exception as e:
+        logger.error(f"Erro ao gerar PDF do Dossie: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro interno ao gerar PDF: {str(e)}")
+
+
+@app.post("/api/automacoes/pdf/chamada")
+def endpoint_pdf_chamada(req: PDFAtaChamadaRequest):
+    try:
+        pdf_bytes = gerar_pdf_ata_chamada(req.dados_treinamento, req.presentes, req.ausentes)
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=ata_{req.dados_treinamento.get('id', 'treinamento')}.pdf"}
+        )
+    except Exception as e:
+        logger.error(f"Erro ao gerar PDF da Ata: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro interno ao gerar PDF: {str(e)}")
