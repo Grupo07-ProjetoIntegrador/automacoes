@@ -17,20 +17,48 @@ def _obter_logo_base64_local() -> str:
             pass
     return ""
 
+def _formatar_data_iso(data_str: str) -> str:
+    """Converte YYYY-MM-DD ou ISO timestamp para DD/MM/YYYY."""
+    if not data_str:
+        return ""
+    try:
+        partes = data_str.split("T")[0]  # remove parte de hora se vier junto
+        ano, mes, dia = partes.split("-")
+        return f"{dia}/{mes}/{ano}"
+    except Exception:
+        return data_str
+
+
 def gerar_pdf_dossie_loja(dados_loja: dict, period: dict, historico_treinamentos: list) -> bytes:
     """
     Gera o PDF do Dossiê da Loja por Período usando WeasyPrint.
     historico_treinamentos: lista de dicts contendo:
       - tema: str
-      - data: str
+      - data: str (YYYY-MM-DD ou DD/MM/YYYY)
       - presentes: lista de str (nomes de representantes presentes)
       - ausentes: lista de str (nomes de representantes ausentes/pendentes)
+
+    dados_loja aceita tanto 'nome' quanto 'name', e 'segmento' quanto 'segment'.
+    period aceita tanto 'de'/'ate' quanto 'data_inicio'/'data_fim'.
     """
     logo_src = _obter_logo_base64_local()
     elemento_logo = f'<img src="{logo_src}" style="display: block; width: 130px; height: auto; border: 0;" alt="Flamboyant" />' if logo_src else ""
-    
+
+    # Compatibilidade: aceita tanto chaves em português quanto em inglês
+    nome_loja = dados_loja.get('nome') or dados_loja.get('name') or 'N/A'
+    segmento_loja = dados_loja.get('segmento') or dados_loja.get('segment') or 'Lojas'
+    luc_loja = dados_loja.get('luc') or ''
+
+    # Compatibilidade: aceita 'de'/'ate' ou 'data_inicio'/'data_fim'
+    periodo_de = period.get('de') or period.get('data_inicio') or ''
+    periodo_ate = period.get('ate') or period.get('data_fim') or ''
+
+    # Formata as datas do período para DD/MM/YYYY
+    periodo_de_fmt = _formatar_data_iso(periodo_de)
+    periodo_ate_fmt = _formatar_data_iso(periodo_ate)
+
     total_treinamentos = len(historico_treinamentos)
-    
+
     # Calcular estatísticas globais
     total_presencas = 0
     total_ausencias = 0
@@ -45,12 +73,14 @@ def gerar_pdf_dossie_loja(dados_loja: dict, period: dict, historico_treinamentos
     for idx, t in enumerate(historico_treinamentos):
         lista_presentes = ", ".join(t.get("presentes", [])) or "Nenhum"
         lista_ausentes = ", ".join(t.get("ausentes", [])) or "Nenhum"
-        
+        # Formata a data de cada treinamento para exibição
+        data_formatada = _formatar_data_iso(t.get('data', ''))
+
         linhas_tabela.append(f"""
             <tr>
                 <td style="padding: 12px 15px; border-bottom: 1px solid #E5E7EB; vertical-align: top; width: 40%;">
                     <div style="font-weight: 700; color: #1F2937; font-size: 12.5px;">{t.get('tema')}</div>
-                    <div style="font-size: 11px; color: #6B7280; margin-top: 3px;">{t.get('data')}</div>
+                    <div style="font-size: 11px; color: #6B7280; margin-top: 3px;">{data_formatada}</div>
                 </td>
                 <td style="padding: 12px 15px; border-bottom: 1px solid #E5E7EB; vertical-align: top; color: #10B981; font-weight: 500; width: 30%;">
                     {lista_presentes}
@@ -222,13 +252,13 @@ def gerar_pdf_dossie_loja(dados_loja: dict, period: dict, historico_treinamentos
                             <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
                                 <tr>
                                     <td style="padding: 5px 0; font-weight: 700; color: #1F2937; width: 15%;">Parceiro / Loja:</td>
-                                    <td style="padding: 5px 0; color: #4B5563; font-weight: 600;">{dados_loja.get('nome')}</td>
+                                    <td style="padding: 5px 0; color: #4B5563; font-weight: 600;">{nome_loja}</td>
                                     <td style="padding: 5px 0; font-weight: 700; color: #1F2937; width: 15%;">Período Analisado:</td>
-                                    <td style="padding: 5px 0; color: #4B5563;">{period.get('de')} até {period.get('ate')}</td>
+                                    <td style="padding: 5px 0; color: #4B5563;">{periodo_de_fmt} até {periodo_ate_fmt}</td>
                                 </tr>
                                 <tr>
                                     <td style="padding: 5px 0; font-weight: 700; color: #1F2937;">Segmentação:</td>
-                                    <td style="padding: 5px 0; color: #4B5563;">{dados_loja.get('segmento', 'Lojas')}</td>
+                                    <td style="padding: 5px 0; color: #4B5563;">{segmento_loja}</td>
                                     <td style="padding: 5px 0; font-weight: 700; color: #1F2937;">Total Módulos:</td>
                                     <td style="padding: 5px 0; color: #4B5563; font-weight: 600;">{total_treinamentos} evento(s)</td>
                                 </tr>
