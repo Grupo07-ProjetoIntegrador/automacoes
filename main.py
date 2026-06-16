@@ -23,6 +23,15 @@ app = FastAPI(
     version="1.0.0"
 )
 
+import threading
+from worker import iniciar_worker
+
+@app.on_event("startup")
+def startup_event():
+    threading.Thread(target=iniciar_worker, daemon=True).start()
+    logger.info("Thread do worker da fila de tarefas iniciada.")
+
+
 # Configura CORS para permitir chamadas do navegador (caso a API do Python seja consumida pelo front)
 app.add_middleware(
     CORSMiddleware,
