@@ -11,7 +11,7 @@ import io
 import config
 from database import db_cursor, test_connection
 from forms_handler import criar_google_form, apagar_formulario
-from services.email_service import enviar_email_formulario, enviar_email_validacao_presenca
+from services.email_service import enviar_email_formulario, enviar_email_validacao_presenca, enviar_email_confirmacao_inscricao
 from services.gerar_pdf import gerar_pdf_dossie_loja, gerar_pdf_ata_chamada
 
 logging.basicConfig(level=logging.INFO)
@@ -67,6 +67,13 @@ class DisparoConviteRequest(BaseModel):
 
 
 class ValidacaoPresencaRequest(BaseModel):
+    treinamento_id: str
+    treinamento: dict
+    destinatario: ConviteDestinatarioRequest
+    user_id: str = None
+
+
+class InscricaoConfirmadaRequest(BaseModel):
     treinamento_id: str
     treinamento: dict
     destinatario: ConviteDestinatarioRequest
@@ -391,3 +398,57 @@ def endpoint_pdf_chamada(req: PDFAtaChamadaRequest):
     except Exception as e:
         logger.error(f"Erro ao gerar PDF da Ata: {e}")
         raise HTTPException(status_code=500, detail=f"Erro interno ao gerar PDF: {str(e)}")
+
+
+def background_notificar_inscricao_confirmada(req: InscricaoConfirmadaRequest):
+    """Tarefa em segundo plano para buscar credenciais Master da API do Gmail e enviar e-mail de confirmação de inscrição."""
+    try:
+        master_id = req.user_id or os.getenv("GOOGLE_MASTER_USER_ID")
+        gmail_scopes = [
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/forms",
+            "https://www.googleapis.com/auth/forms.body",
+            "https://www.googleapis.com/auth/gmail.send"
+        ]
+        
+        try:
+            from services.email_service import _obter_credenciais_usuario
+            creds_master = _obter_credenciais_usuario(master_id, gmail_scopes)
+        except Exception as db_err:
+            logger.warning(f"Falha de conexão temporária ao banco Supabase ao obter token master: {db_err}")
+            creds_master = None
+
+        enviou = enviar_email_confirmacao_inscricao(
+            treinamento=req.treinamento,
+            email_destinatario=req.destinatario.email,
+            nome_destinatario=req.destinatario.nome,
+            user_id=master_id,
+            usuario_creds=creds_master
+        )
+
+        if enviou:
+            logger.info(f"E-mail de confirmação de inscrição enviado com SUCESSO via Gmail API para {req.destinatario.email}")
+        else:
+            logger.warning(f"Não foi possível processar o envio de confirmação de inscrição via Gmail API para {req.destinatario.email}.")
+            
+    except Exception as e:
+        logger.error(f"Erro crítico no fluxo em background de notificação de inscrição: {e}")
+
+
+@app.post("/api/automacoes/notificar-inscricao-confirmada")
+def notificar_inscricao_confirmada(req: InscricaoConfirmadaRequest, background_tasks: BackgroundTasks):
+    """
+    Acionado após o webhook de inscrição. 
+    Agenda o envio em background.
+    """
+    with db_cursor() as cursor:
+        cursor.execute("SELECT id FROM treinamentos WHERE id = %s;", (req.treinamento_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Treinamento informado não existe no banco de dados.")
+
+    background_tasks.add_task(background_notificar_inscricao_confirmada, req)
+
+    return {
+        "status": "processing",
+        "message": f"A notificação de confirmação de inscrição para '{req.destinatario.email}' foi agendada via Gmail API."
+    }

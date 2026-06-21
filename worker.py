@@ -2,13 +2,15 @@ import time
 import json
 import logging
 from database import get_connection
-from main import background_gerar_e_enviar, background_disparar_convites, GerarFormsRequest, DisparoConviteRequest
 
 logger = logging.getLogger("worker")
 logger.setLevel(logging.INFO)
 
 def processar_job(job_id, task_type, payload):
     logger.info(f"Processando job {job_id} do tipo {task_type}")
+    
+    # Import local para evitar import circular com o main.py
+    from main import background_gerar_e_enviar, background_disparar_convites, GerarFormsRequest, DisparoConviteRequest
     
     if task_type == 'gerar_forms':
         # Instancia o request do Pydantic

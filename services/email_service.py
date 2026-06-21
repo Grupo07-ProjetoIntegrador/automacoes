@@ -399,3 +399,109 @@ def enviar_email_validacao_presenca(
 
     logger.warning("Fazendo fallback para SMTP para envio do e-mail de presença validada.")
     return _enviar_via_smtp(destinatario, assunto, html_content)
+
+
+def _compor_html_confirmacao_inscricao(treinamento, nome_destinatario: str = "") -> str:
+    tema = _valor_treinamento(treinamento, "tema", "Treinamento")
+    local = _valor_treinamento(treinamento, "local")
+    periodo = _formatar_periodo(treinamento)
+    saudacao = f"Olá, {nome_destinatario}," if nome_destinatario else "Olá,"
+
+    logo_src = _obter_logo_base64_local()
+
+    linhas_evento = []
+    if periodo:
+        linhas_evento.append(f'<tr><td style="padding: 4px 0; font-weight: 700; color: #1F2937; width: 60px;">Data:</td><td style="padding: 4px 0; color: #4B5563;">{periodo}</td></tr>')
+    if local:
+        linhas_evento.append(f'<tr><td style="padding: 4px 0; font-weight: 700; color: #1F2937;">Local:</td><td style="padding: 4px 0; color: #4B5563;">{local}</td></tr>')
+
+    tabela_evento_html = f'<table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 10px;">{"".join(linhas_evento)}</table>' if linhas_evento else ""
+
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <title>Inscrição Confirmada - JP Mall Corporativo</title>
+</head>
+<body style="font-family: 'Inter', 'Roboto', system-ui, sans-serif; background-color: #F7F4EF; margin: 0; padding: 40px 20px; color: #1F2937; -webkit-print-color-adjust: exact;">
+    <div style="max-width: 650px; margin: 0 auto; background-color: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);">
+        
+        <div style="background-color: #8B1A1A; padding: 30px 35px; border-bottom: 4px solid #C8A882;">
+            <table style="width: 100%; border-collapse: collapse; border: 0;">
+                <tr>
+                    <td style="padding: 0; vertical-align: middle; text-align: left; width: 140px;">
+                        {"<img src='" + logo_src + "' alt='Logo Flamboyant' style='display: block; width: 130px; height: auto; border: 0;' />" if logo_src else ""}
+                    </td>
+                    <td style="padding: 0; vertical-align: middle; text-align: right;">
+                        <div style="color: #C8A882; text-transform: uppercase; font-size: 12px; letter-spacing: 2px; font-weight: 700; margin-bottom: 4px;">JP Mall Corporativo</div>
+                        <h1 style="margin: 0; color: #FFFFFF; font-size: 22px; font-weight: 700; line-height: 1.3;">Sua Inscrição foi Confirmada!</h1>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        <div style="padding: 40px; line-height: 1.6;">
+            <div style="font-size: 17px; font-weight: 700; color: #1F2937; margin-bottom: 16px;">{saudacao}</div>
+            
+            <p style="color: #4B5563; font-size: 15px; margin-top: 0; margin-bottom: 16px;">
+                Sua inscrição para o treinamento <strong>{tema}</strong> foi realizada com sucesso!
+            </p>
+            
+            <p style="color: #4B5563; font-size: 15px; margin-bottom: 16px;">
+                Ficamos muito felizes com sua participação. Abaixo estão as informações do treinamento para você se programar:
+            </p>
+
+            {f'<div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; padding: 20px; margin: 20px 0; border-radius: 8px;"><h4 style="margin: 0; color: #8B1A1A; font-size: 14px; font-weight: 700; text-transform: uppercase;">Detalhes do Treinamento</h4>{tabela_evento_html}</div>' if tabela_evento_html else ""}
+
+            <p style="color: #4B5563; font-size: 15px; margin-top: 20px; margin-bottom: 0;">
+                Prepare-se para uma excelente jornada de aprendizado. Nos vemos no treinamento!
+            </p>
+        </div>
+
+        <div style="background-color: #F9FAFB; border-top: 1px solid #E5E7EB; padding: 30px 40px; text-align: center;">
+            <div style="font-size: 16px; font-weight: 700; color: #8B1A1A; letter-spacing: 1px; margin-bottom: 6px;">GRUPO FLAMBOYANT</div>
+            <div style="font-size: 12px; font-style: italic; color: #C8A882; margin-bottom: 15px;">Elevar para evoluir, envolver para encantar.</div>
+            <div style="font-size: 11px; color: #9CA3AF; line-height: 1.4;">
+                Este e-mail confirma a inscrição recebida de forma oficial no ecossistema do Shopping Flamboyant.<br>
+                © {datetime.now().year} Grupo Flamboyant — Todos os direitos reservados.
+            </div>
+        </div>
+    </div>
+</body>
+</html>"""
+
+
+def enviar_email_confirmacao_inscricao(
+    treinamento,
+    email_destinatario: str,
+    nome_destinatario: str = "",
+    user_id: str = None,
+    usuario_creds=None,
+) -> bool:
+    destinatario = email_destinatario or config.DEFAULT_DESTINATION_EMAIL
+    if not destinatario:
+        logger.warning("Nenhum e-mail de destino configurado para a confirmação de inscrição.")
+        return False
+
+    assunto = f"Inscrição Confirmada: { _valor_treinamento(treinamento, 'tema', 'Treinamento') }"
+    html_content = _compor_html_confirmacao_inscricao(treinamento, nome_destinatario=nome_destinatario)
+
+    if not usuario_creds:
+        if not user_id:
+            user_id = os.getenv("GOOGLE_MASTER_USER_ID")
+            logger.info(f"Nenhum user_id fornecido. Utilizando fallback da Conta Master ID: {user_id}")
+
+        gmail_scopes = ["https://www.googleapis.com/auth/gmail.send"]
+        usuario_creds = _obter_credenciais_usuario(user_id, gmail_scopes)
+
+    if usuario_creds:
+        try:
+            gmail_service = build("gmail", "v1", credentials=usuario_creds)
+            return _enviar_via_gmail_api(gmail_service, destinatario, assunto, html_content)
+        except HttpError as gmail_err:
+            logger.error(f"Falha de API do Gmail ao enviar confirmação de inscrição: {gmail_err.content.decode('utf-8')}")
+        except Exception as gmail_err:
+            logger.warning(f"Falha crítica ao enviar confirmação via Gmail API ({gmail_err})")
+
+    logger.warning("Fazendo fallback para SMTP para envio do e-mail de confirmação de inscrição.")
+    return _enviar_via_smtp(destinatario, assunto, html_content)
