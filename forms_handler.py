@@ -102,10 +102,13 @@ def _obter_credenciais_google(scopes, user_id: str = None):
                 if row:
                     access_token, refresh_token, token_type, scope, expires_at = row
 
-                    # Garante que expires_at seja timezone-aware (UTC) para que
-                    # creds.expired funcione corretamente na comparação de datas
-                    if expires_at and isinstance(expires_at, datetime) and expires_at.tzinfo is None:
-                        expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    # Garante que expires_at seja convertido para naive UTC para evitar
+                    # erros de comparação (naive vs aware) com datetime.utcnow() no google-auth
+                    if expires_at and isinstance(expires_at, datetime):
+                        if expires_at.tzinfo is not None:
+                            expires_at = expires_at.astimezone(timezone.utc).replace(tzinfo=None)
+                        else:
+                            expires_at = expires_at.replace(tzinfo=None)
 
                     creds = OAuth2Credentials(
                         token=access_token,
