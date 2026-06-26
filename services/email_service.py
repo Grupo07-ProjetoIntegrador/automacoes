@@ -2,7 +2,7 @@ import base64
 import logging
 import os
 import smtplib
-from datetime import datetime
+from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -281,6 +281,12 @@ def _obter_credenciais_usuario(user_id: str, scopes: list[str]):
                 return None
 
             access_token, refresh_token, token_type, expires_at = row
+
+            # Garante que expires_at seja timezone-aware (UTC) para que
+            # creds.expired funcione corretamente na comparação de datas
+            if expires_at and isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+
             creds = OAuth2Credentials(
                 token=access_token,
                 refresh_token=refresh_token,
@@ -288,6 +294,7 @@ def _obter_credenciais_usuario(user_id: str, scopes: list[str]):
                 client_id=client_id,
                 client_secret=client_secret,
                 scopes=scopes,
+                expiry=expires_at,  # CORREÇÃO: sem isso, creds.expired é sempre False
             )
 
             if creds.expired and creds.refresh_token:

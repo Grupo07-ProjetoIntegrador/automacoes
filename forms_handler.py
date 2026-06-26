@@ -1,7 +1,7 @@
 import os
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import requests
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
@@ -101,6 +101,12 @@ def _obter_credenciais_google(scopes, user_id: str = None):
                 
                 if row:
                     access_token, refresh_token, token_type, scope, expires_at = row
+
+                    # Garante que expires_at seja timezone-aware (UTC) para que
+                    # creds.expired funcione corretamente na comparação de datas
+                    if expires_at and isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
                     creds = OAuth2Credentials(
                         token=access_token,
                         refresh_token=refresh_token,
@@ -108,6 +114,7 @@ def _obter_credenciais_google(scopes, user_id: str = None):
                         client_id=os.getenv('GOOGLE_CLIENT_ID'),
                         client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
                         scopes=scopes,
+                        expiry=expires_at,  # CORREÇÃO: sem isso, creds.expired é sempre False
                     )
                     
                     # Verifica se o token expirou (ou está prestes a expirar) e faz o Auto-Refresh
