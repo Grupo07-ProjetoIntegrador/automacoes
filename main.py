@@ -14,8 +14,17 @@ from forms_handler import criar_google_form, apagar_formulario
 from services.email_service import enviar_email_formulario, enviar_email_validacao_presenca, enviar_email_confirmacao_inscricao
 from services.gerar_pdf import gerar_pdf_dossie_loja, gerar_pdf_ata_chamada
 
-logging.basicConfig(level=logging.INFO)
+import sys
+# Configura o logger raiz para garantir exibição no console do uvicorn
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+if not root_logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    root_logger.addHandler(handler)
+
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 app = FastAPI(
     title="Módulo de Automações - Shopping Flamboyant",

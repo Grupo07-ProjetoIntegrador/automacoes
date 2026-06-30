@@ -12,8 +12,17 @@ from google.auth.transport.requests import Request as GoogleRequest
 import config
 from database import db_cursor
 
-logging.basicConfig(level=logging.INFO)
+import sys
+# Configura logging para garantir a visualização dos logs no console/uvicorn
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+if not root_logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    root_logger.addHandler(handler)
+
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 def _valor_treinamento(treinamento, chave: str, default: str = "") -> str:
@@ -110,13 +119,14 @@ def _obter_credenciais_google(scopes, user_id: str = None):
                         else:
                             expires_at = expires_at.replace(tzinfo=None)
 
+                    db_scopes = scope.split() if scope else scopes
                     creds = OAuth2Credentials(
                         token=access_token,
                         refresh_token=refresh_token,
                         token_uri='https://oauth2.googleapis.com/token',
                         client_id=os.getenv('GOOGLE_CLIENT_ID'),
                         client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
-                        scopes=scopes,
+                        scopes=db_scopes,
                         expiry=expires_at,  # CORREÇÃO: sem isso, creds.expired é sempre False
                     )
                     
@@ -388,7 +398,13 @@ def criar_google_form(treinamento_id: str, treinamento, user_id: str = None) -> 
         lojas_raw = obter_lojas_ativas()
         if not lojas_raw:
             lojas_raw = ["Livraria Leitura", "Cacau Show", "Zara"]
-        seen = set()
+        seen = {
+            "OUTRA LOJA (NÃO LISTADA)",
+            "OUTRA LOJA (NAO LISTADA)",
+            "OUTRA LOJA",
+            "OUTRO",
+            "OUTRA"
+        }
         lojas = []
         for nome in lojas_raw:
             chave = nome.strip().upper()

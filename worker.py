@@ -3,6 +3,15 @@ import json
 import logging
 from database import get_connection
 
+import sys
+# Configura o logger raiz para garantir exibição
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+if not root_logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    root_logger.addHandler(handler)
+
 logger = logging.getLogger("worker")
 logger.setLevel(logging.INFO)
 

@@ -273,14 +273,14 @@ def _obter_credenciais_usuario(user_id: str, scopes: list[str]):
     try:
         with db_cursor() as cursor:
             cursor.execute(
-                "SELECT access_token, refresh_token, token_type, expires_at FROM google_oauth_tokens WHERE user_id = %s LIMIT 1;",
+                "SELECT access_token, refresh_token, token_type, scope, expires_at FROM google_oauth_tokens WHERE user_id = %s LIMIT 1;",
                 (user_id,)
             )
             row = cursor.fetchone()
             if not row:
                 return None
 
-            access_token, refresh_token, token_type, expires_at = row
+            access_token, refresh_token, token_type, scope, expires_at = row
 
             # Garante que expires_at seja convertido para naive UTC para evitar
             # erros de comparação (naive vs aware) com datetime.utcnow() no google-auth
@@ -290,23 +290,26 @@ def _obter_credenciais_usuario(user_id: str, scopes: list[str]):
                 else:
                     expires_at = expires_at.replace(tzinfo=None)
 
+            db_scopes = scope.split() if scope else scopes
             creds = OAuth2Credentials(
                 token=access_token,
                 refresh_token=refresh_token,
                 token_uri="https://oauth2.googleapis.com/token",
                 client_id=client_id,
                 client_secret=client_secret,
-                scopes=scopes,
+                scopes=db_scopes,
                 expiry=expires_at,  # CORREÇÃO: sem isso, creds.expired é sempre False
             )
 
             if creds.expired and creds.refresh_token:
                 logger.info("Atualizando credencial do usuario para envio de e-mail via Gmail API...")
                 creds.refresh(GoogleRequest())
+                nova_expiracao = creds.expiry.strftime('%Y-%m-%d %H:%M:%S') if creds.expiry else None
+                token_type_value = getattr(creds, 'token_type', None) or token_type or 'Bearer'
                 with db_cursor() as update_cursor:
                     update_cursor.execute(
                         "UPDATE google_oauth_tokens SET access_token = %s, expires_at = %s, token_type = %s WHERE user_id = %s;",
-                        (creds.token, creds.expiry, creds.token_type or token_type, user_id)
+                        (creds.token, nova_expiracao, token_type_value, user_id)
                     )
 
             return creds
